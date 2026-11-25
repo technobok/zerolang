@@ -626,17 +626,19 @@ staticListTagWritten: function {ast: Ast dnode: staticlistref} out bool is {
 # `out T` clause when written, else the type the elements' own tags agree on,
 # else i64 -- text when every element is a string, f64 when every one is a
 # float. Tags that disagree are reported here, at the declaration, because a
-# block that means two widths at once has no honest emission.
+# block that means two widths at once has no honest emission. A tag names a
+# scalar, so it never names an instance an `out` names: every tag disagrees.
 staticListElemTypeName: function {
     ast: Ast
     st: zenv.ZSymbolTable
     dnode: staticlistref
-    outName: StringView
+    # the element type the `out` names; 0 when it names none
+    outTid: ztypes.tid
     # each element's value, by slot (staticListElemValues)
     vals: ListVal ztypes.cval
 } out zast.nameid is {
     pick: zast.nameid
-    if outName.length > 0 then pick = ast.internString text: outName
+    if outTid.notZero then pick = resolve.typeNameIdOf reg: st.reg :ast tid: outTid
     allFloat: true
     allString: true
     kU: u64
@@ -646,40 +648,53 @@ staticListElemTypeName: function {
         kU = kU + 1
         # an element with no value was refused already, and says nothing here
         if cv.kind.none then continue
-        if cv.kind.svalKind.not then allString = false
-        if cv.kind.fvalKind.not then allFloat = false
+        allString = allString and cv.kind.svalKind
+        allFloat = allFloat and cv.kind.fvalKind
         opRef: zast.nodeid
         el: ast.nodes.getView i: elId
         if el.namedoperation then opRef = el.operation
         de: staticListElemParts :ast opId: opRef
         if de.tagId.notZero then {
             tgId: atomNameId :ast n: (ast.nodes.getView i: de.tagId)
-            if pick.isZero then pick = tgId
-            if (tgId == pick).not then {
-                pn: zast.nameTextAt :ast ref: pick
-                tn: zast.nameTextAt :ast ref: tgId
-                dm: "list element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
-                dh: "a list has one element type: write it once, as `out staticlist T`".string
-                en: String
-                (
-                    addErrorWithHint
-                    :st
-                    nodeid: dnode.nid
-                    lineno: dnode.lineno
-                    colno: dnode.colno
-                    e: zast.err.typeError
-                    msg: dm
-                    note: en
-                    hint: dh
-                    width: 4
-                )
-            }
+            if pick.isZero when outTid.isZero then pick = tgId
+            if (tgId == pick).not then refuseElemTagDisagrees :ast :st :dnode :pick :outTid :tgId
         }
     }
     if pick.notZero then return pick
     if allString when dnode.nelems > 0 then return (ast.internString text: "text")
     if allFloat when dnode.nelems > 0 then return (ast.internString text: "f64")
     return (ast.internString text: "i64")
+}
+
+# refuseElemTagDisagrees -- an element's tag `tgId` names another type than the
+# list's: the `out` type `outTid` as a program writes it, else the first tag
+# `pick`.
+refuseElemTagDisagrees: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    dnode: staticlistref
+    pick: zast.nameid
+    outTid: ztypes.tid
+    tgId: zast.nameid
+} is {
+    pn: zast.nameTextCopy :ast ref: pick
+    if outTid.notZero then pn = specWrittenName :st :ast tid: outTid
+    tn: zast.nameTextAt :ast ref: tgId
+    dm: "list element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
+    dh: "a list has one element type: write it once, as `out staticlist T`".string
+    en: String
+    (
+        addErrorWithHint
+        :st
+        nodeid: dnode.nid
+        lineno: dnode.lineno
+        colno: dnode.colno
+        e: zast.err.typeError
+        msg: dm
+        note: en
+        hint: dh
+        width: 4
+    )
 }
 
 # staticListValueTemplate -- the template a list of element type `elemTid` is a value
@@ -984,9 +999,9 @@ resolveStaticListInto: function {
     st.walk.consts.mono = prevMono
     # a typed value type names the element type the elements' own tags are
     # weighed against; an untyped one, or an `out` refused below, names none
-    etn: String
-    if vparts.isValue when vparts.elemLiteral.not then etn = st.reg.nameOf tid: vparts.elem
-    etId: staticListElemTypeName :ast :st :dnode outName: etn.stringView :vals
+    etT: ztypes.tid
+    if vparts.isValue when vparts.elemLiteral.not then etT = vparts.elem
+    etId: staticListElemTypeName :ast :st :dnode outTid: etT :vals
     elemTid: litId
     idxTid: ztypes.tid
     # the list's value type, when its `out` names one over a type parameter
@@ -1021,7 +1036,7 @@ resolveStaticListInto: function {
     # a list that names its type -- `out T`, or a tagged element -- reads each
     # element at that type; one that names none reads them untyped, as a unit
     # constant reads, and only what reaches run time is the i64 / f64 default
-    typed: (etn.length > 0) or valueOut or (staticListTagWritten :ast :dnode)
+    typed: etT.notZero or valueOut or (staticListTagWritten :ast :dnode)
     # the template the list's value is an instance of: its members are every
     # list's own
     valTpl: staticListValueTemplate :ast :st :elemTid
@@ -1675,15 +1690,7 @@ bareNameDenotesType: function {
         :st
         declId: aad
     ).not then return false
-    # the spelled name against the registry name, both read through views
-    # scoped to this block: the alias walk below lends ast and the table
-    named: false
-    {
-        tnq: st.reg.nameViewOf :tid
-        ndNm: zast.nameTextAt :ast ref: nameId
-        named = tnq == ndNm
-    }
-    if named then return true
+    if (resolve.typeNameIdOf reg: st.reg :ast :tid) == nameId then return true
     if (preludeAliasNamesType :st :ast :nameId :tid) then return true
     # a unit instance's copy of a type its generic unit declares is named as
     # the type is
@@ -5921,7 +5928,7 @@ constFitNumber: function {
         return ztypes.noConst
     }
     r: v
-    bn: nameIdOf :ast name: (st.reg.nameOf tid: base).stringView
+    bn: resolve.typeNameIdOf reg: st.reg :ast tid: base
     cv: (
         consteval.constOfConversion
         :st

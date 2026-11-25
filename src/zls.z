@@ -4631,18 +4631,21 @@ isUnitTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out 
     }
 }
 
-# typeNamedAs -- type `tid`'s own name is `name`, its unit qualifier aside: the
-# name in a construction names the type, where a value of the type would not.
-# A unit is not asked.
+# typeNamedAs -- type `tid` is declared with the name `nameId`: the name in a
+# construction names the type, where a value of the type would not. A unit is
+# not asked, and an instance is named by its application, never by a name.
 typeNamedAs: function {
-    o: (Option zenv.ZSymbolTable).view tid: ztypes.tid name: StringView
+    o: (Option zenv.ZSymbolTable).view ast: Ast.view tid: ztypes.tid nameId: zast.nameid
 } out bool is {
     # a unit's name resolves through the unit lookup, which knows its file
     if (isUnitTidOpt :o :tid) then return false
-    full: displayTypeNameOfOpt :o :tid site: ztypes.declid
-    if full.stringView == name then return true
-    dotted: ".\{name}"
-    return (full.stringView.endsWith suffix: dotted)
+    match (
+        o
+    ) case some then {
+        return (ztypecheck.typeNameIdOf reg: o.reg :ast :tid) == nameId
+    } case none then {
+        return false
+    }
 }
 
 # navTargetRefine -- the legs that need the Decl. An OPERATOR: the method the
@@ -4661,6 +4664,8 @@ navTargetRefine: function {
     hnid: zast.nodeid
     # the hit's name text
     hnm: StringView
+    # the hit's name
+    hnmId: zast.nameid
     kind: hitkind
     base: navtarget
 } out navtarget is {
@@ -4697,7 +4702,7 @@ navTargetRefine: function {
         refTid = declOnlyTid :snap declId: refDeclId
     }
     if kind.use when own.vid.isZero when refDeclId.isZero then {
-        ct9: calleeTypeOf o: snap.st nid: hnid name: hnm
+        ct9: calleeTypeOf o: snap.st ast: snap.prog nid: hnid nameId: hnmId
         if ct9.notZero then {
             refTid = ct9
             refDeclId = surfaceDeclOfType o: snap.st prog: snap.prog tid: ct9
@@ -4718,10 +4723,10 @@ declOnlyTid: function {snap: zcheck.CheckResult declId: ztypes.declid} out ztype
 # the type it builds and keeps its refDecl free for the emitter, so the stamp is
 # what says which type it is.
 calleeTypeOf: function {
-    o: (Option zenv.ZSymbolTable).view nid: zast.nodeid name: StringView
+    o: (Option zenv.ZSymbolTable).view ast: Ast.view nid: zast.nodeid nameId: zast.nameid
 } out ztypes.tid is {
     ct: nodeTypeAt :o :nid
-    if ct.notZero when (typeNamedAs :o tid: ct :name) then return ct
+    if ct.notZero when (typeNamedAs :o :ast tid: ct :nameId) then return ct
     return ztypes.tid.zero
 }
 
@@ -4782,7 +4787,7 @@ navResolve: function {
             declId: sd
         )
     }
-    t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
+    t: navTargetRefine :snap :hnid hnm: hnm.stringView hnmId: hit.name kind: hit.kind :base
     # a unit's name answers with its FILE: a top-level unit's by name, a
     # subunit's through the declaration the checker resolved it to
     unitFsno: zvfs.fsno
@@ -5779,8 +5784,7 @@ calleeDeclOf: function {snap: zcheck.CheckResult calNid: zast.nodeid} out ztypes
     if cd.notZero then return cd
     caln: snap.prog.nodes.getView i: calNid
     if caln.atomid.not then return cd
-    cnm: zast.nameTextAt ast: snap.prog ref: caln.name
-    ct: calleeTypeOf o: snap.st nid: calNid name: cnm.stringView
+    ct: calleeTypeOf o: snap.st ast: snap.prog nid: calNid nameId: caln.name
     if ct.isZero then return cd
     return (surfaceDeclOfType o: snap.st prog: snap.prog tid: ct)
 }
@@ -5832,8 +5836,7 @@ rowNamesDecl: function {snap: zcheck.CheckResult row: spanrow declId: ztypes.dec
     o: snap.st
     rd: refDeclOf :o nid: row.nodeid
     if rd.isZero when row.kind.use when (useVarId :o nid: row.nodeid).isZero then {
-        nm: zast.nameTextAt ast: snap.prog ref: row.name
-        ct: calleeTypeOf :o nid: row.nodeid name: nm.stringView
+        ct: calleeTypeOf :o ast: snap.prog nid: row.nodeid nameId: row.name
         if ct.notZero then rd = surfaceDeclOfType :o prog: snap.prog tid: ct
     }
     if rd.isZero then return false
