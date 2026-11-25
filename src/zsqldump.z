@@ -286,14 +286,13 @@ definedUnitOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Option 
     return (Option.some nm)
 }
 
-# typeInUnit -- whether the type `tid` is DEFINED in the unit named `unm`. An
-# id past the registry, and a type with no defining unit, belong to none. The
-# canon dumps ask this per type per unit, which is why it is one question.
-typeInUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid unm: StringView} out bool is {
-    if (tid < st.reg.nextTid).not then return false
-    du: definedUnitOf :st :tid
-    if du.none then return false
-    return du.stringView == unm
+# typeInUnit -- whether the type `tid` is DEFINED in the unit whose root is
+# `ud`. An id past the registry, and a type with no defining unit, belong to
+# none. The canon dumps ask this per type per unit, which is why it is one
+# question.
+typeInUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid ud: ztypes.declid} out bool is {
+    if (tid < st.reg.nextTid).not or ud.isZero then return false
+    return (ztypecheck.unitDeclOfTid reg: st.reg typing: st.typing :tid) == ud
 }
 
 # genericChildRow -- one `generic_child` row: the template, the edge key and
@@ -1361,7 +1360,7 @@ ZDumper: class {
     }
 
     # emit each template's instantiations, canonically ordered
-    appendGenericChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
+    appendGenericChildrenCanon: function {:this ud: ztypes.declid st: zenv.ZSymbolTable.view} is {
         rows: List String
         n: st.reg.nextTid
         tid: ztypes.tid
@@ -1370,7 +1369,7 @@ ZDumper: class {
             # holds the registry, and canonTypeName reads it
             gkeys: ListVal ztypes.genericarg
             gtids: ListVal ztypes.tid
-            if (typeInUnit :st :tid :unm) then {
+            if (typeInUnit :st :tid :ud) then {
                 zt: st.reg.typeById.get i: tid
                 for each ze8: zt.typeChildren.iterateItems loop {
                     gkeys.append (ztypes.genericarg.typeArg ze8.key)
@@ -1395,14 +1394,14 @@ ZDumper: class {
     }
 
     # emit each instantiation's type arguments, canonically ordered
-    appendGenericArgsCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
+    appendGenericArgsCanon: function {:this ud: ztypes.declid st: zenv.ZSymbolTable.view} is {
         rows: List String
         n: st.reg.nextTid
         tid: ztypes.tid
         for tid < n loop {
             # collected before any row is built, as in appendGenericChildrenCanon
             cargs: ListVal ztypes.genericarg
-            if (typeInUnit :st :tid :unm) then {
+            if (typeInUnit :st :tid :ud) then {
                 zt: st.reg.typeById.get i: tid
                 for each ce: zt.genericArgs loop {
                     cargs.append ce
@@ -1421,17 +1420,14 @@ ZDumper: class {
     }
 
     # emit the type table, canonically ordered
-    appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
+    appendTypesCanon: function {:this ud: ztypes.declid st: zenv.ZSymbolTable.view} is {
         rows: List String
         n: st.reg.nextTid
         tid: ztypes.tid
         for tid < n loop {
             if tid >= st.reg.nextTid then return
             zt: st.reg.typeById.get i: tid
-            du: definedUnitOf :st :tid
-            inUnit: false
-            if du.some when du.stringView == unm then inUnit = true
-            if inUnit then {
+            if (typeInUnit :st :tid :ud) then {
                 nameSql: sqlStr s: zt.name.stringView
                 ttName: typetypeLabel :st :tid tt: zt.typetype
                 ttSql: sqlStr s: ttName.stringView
@@ -1455,7 +1451,7 @@ ZDumper: class {
     # name, position, param ownership. The canon dump's only view of member
     # structure, so it resolves ids to names rather than dumping the decl tree.
     appendDeclChildCanon: function {
-        :this ast: Ast.view unm: StringView st: zenv.ZSymbolTable.view
+        :this ast: Ast.view ud: ztypes.declid st: zenv.ZSymbolTable.view
     } is {
         rows: List String
         tn: st.reg.nextTid
@@ -1463,10 +1459,7 @@ ZDumper: class {
         for tid < tn loop {
             pid: tid
             tid = tid.next
-            pdu: definedUnitOf :st tid: pid
-            inUnit: false
-            if pdu.some when pdu.stringView == unm then inUnit = true
-            if inUnit then {
+            if (typeInUnit :st tid: pid :ud) then {
                 otSq: pid
                 pName: canonTypeName reg: st.reg tid: otSq
                 pSql: sqlStr s: pName.stringView
@@ -1497,16 +1490,13 @@ ZDumper: class {
     }
 
     # emit the implementations, canonically ordered
-    appendImplementationCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
+    appendImplementationCanon: function {:this ud: ztypes.declid st: zenv.ZSymbolTable.view} is {
         rows: List String
         ci: ztypes.confid
         for ci.next < st.typing.nextConf loop {
             ci = ci.next
             cf: st.typing.implementation.get i: ci
-            idu: definedUnitOf :st tid: cf.implTypeId
-            inUnit: false
-            if idu.some when idu.stringView == unm then inUnit = true
-            if inUnit then {
+            if (typeInUnit :st tid: cf.implTypeId :ud) then {
                 iName: canonTypeName reg: st.reg tid: cf.implTypeId
                 sName: canonTypeName reg: st.reg tid: cf.specTypeId
                 iSql: sqlStr s: iName.stringView
@@ -1525,28 +1515,29 @@ ZDumper: class {
     # (parentTypeId, nameId) the table uses, and sorted like every canon
     # section so the golden does not depend on map order.
     appendMemberConstCanon: function {
-        :this pool: zast.StringPool.view unm: StringView st: zenv.ZSymbolTable
+        :this pool: zast.StringPool.view ud: ztypes.declid st: zenv.ZSymbolTable
     } is {
         rows: List String
         # the iteration holds the table exclusively and rendering a value reads
         # the whole symbol table: collect this unit's entries first, render
         # them once the iterator has died
+        mOwners: ListVal ztypes.tid
         mNames: ListVal zast.nameid
         mVals: ListVal ztypes.cval
         for each mc: st.typing.memberConst.iterateItems loop {
-            pt: mc.key.owner
-            nm: mc.key.name
-            # the parent of a unit constant IS the unit type, whose name is the
-            # unit name -- definedUnitOf answers for a type declared INSIDE a
-            # unit and has nothing to say about the unit type itself.
-            tn: canonTypeName reg: st.reg tid: pt
-            if tn.stringView == unm then {
-                mNames.append nm
-                mVals.append mc.value
-            }
+            mOwners.append mc.key.owner
+            mNames.append mc.key.name
+            mVals.append mc.value
         }
         mi: u64
         for mi < mNames.length loop {
+            # the parent of a unit constant IS the unit type, declared by the
+            # unit itself -- typeInUnit answers for a type declared INSIDE a
+            # unit and has nothing to say about the unit type itself.
+            if ud.isZero or ((st.typing.declIdOfType typeId: (mOwners.get i: mi)) != ud) then {
+                mi = mi + 1
+                continue
+            }
             mn: pool.texts.get i: (mNames.get i: mi)
             cvt: constValueCanonText :pool :st v: (mVals.get i: mi)
             line: "\{sqlStr s: mn.stringView} | \{sqlStr s: cvt.stringView}"
@@ -1826,11 +1817,6 @@ canonTypeName: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out Str
     return zt.name.copy
 }
 
-# mainUnitNameOf -- the program's main unit name as an owned String.
-mainUnitNameOf: function {program: Ast.view} out String is {
-    return program.mainUnitName.copy
-}
-
 # dumpCanon -- a canonical, id-normalized rendering of the typecheck state
 # (unit, types, decl_child, implementation, and the body-walk symbol table:
 # scope / entry / variable / narrowed_subtype) for the dump-canon regression
@@ -1840,17 +1826,17 @@ mainUnitNameOf: function {program: Ast.view} out String is {
 # render the whole program (AST plus symbol table) as canonical text
 # for golden-diff comparison.
 dumpCanon: function {program: Ast.view symtab: zenv.ZSymbolTable} out String is {
-    mu: mainUnitNameOf :program
+    mu: symtab.typing.mainUnitRoot
     d: ZDumper acc: "".string
     d.appendUnitsCanon :program
-    d.appendTypesCanon unm: mu.stringView st: symtab
-    d.appendDeclChildCanon ast: program unm: mu.stringView st: symtab
+    d.appendTypesCanon ud: mu st: symtab
+    d.appendDeclChildCanon ast: program ud: mu st: symtab
     d.appendArgDispositionCanon ast: program st: symtab
     d.appendArgParamCanon ast: program st: symtab
-    d.appendGenericChildrenCanon unm: mu.stringView st: symtab
-    d.appendGenericArgsCanon unm: mu.stringView st: symtab
-    d.appendImplementationCanon unm: mu.stringView st: symtab
-    d.appendMemberConstCanon pool: program.names unm: mu.stringView st: symtab
+    d.appendGenericChildrenCanon ud: mu st: symtab
+    d.appendGenericArgsCanon ud: mu st: symtab
+    d.appendImplementationCanon ud: mu st: symtab
+    d.appendMemberConstCanon pool: program.names ud: mu st: symtab
     d.appendSymbolTableCanon ast: program st: symtab
     d.appendCallGenericBindingCanon :program st: symtab
     return d.acc.copy
