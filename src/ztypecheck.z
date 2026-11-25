@@ -178,6 +178,7 @@ public: unit {
     # the name a type is written with, by id; 0 for an instance, which a program names by
     # its application
     typeNameIdOf: resolve.typeNameIdOf
+    :writtenTypeNameFrom
     # the numeric kind of a scalar type: one the SYSTEM declares, by the name its declaration
     # was given -- system.z's own `u8`, or wideint's `i128`
     numKindOfTid: numerics.numKindOfTid
@@ -189,7 +190,6 @@ public: unit {
     # unitPathOfTid's walk from a declaration: the units a program spells to reach what
     # `declId` declares (a unit constant's `nav`)
     unitPathOfDecl: numerics.unitPathOfDecl
-    unitPathOfTid: numerics.unitPathOfTid
     # the (unit, member) pair a re-export Decl names, as ids; an absent pair when the Decl is
     # absent or not a re-export
     reexportTargetIdsOf: resolve.reexportTargetIdsOf
@@ -994,18 +994,47 @@ writtenTypeName: function {
     ast: Ast.view
     tid: ztypes.tid
 } out String is {
+    return (spellType :reg :typing :ast :tid qualified: false site: ztypes.declid)
+}
+
+# writtenTypeNameFrom -- writtenTypeName as a program in unit `site` writes it,
+# as an editor's card names it (qualifiedLeafName): `(ListRef io.File)`. 0 for
+# no site.
+writtenTypeNameFrom: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ast: Ast.view
+    tid: ztypes.tid
+    site: ztypes.declid
+} out String is {
+    return (spellType :reg :typing :ast :tid qualified: true :site)
+}
+
+# spellType -- writtenTypeName's walk: each type that is no instance is named
+# by its own name, or `qualified` as a program in `site` writes it.
+spellType: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    ast: Ast.view
+    tid: ztypes.tid
+    qualified: bool
+    site: ztypes.declid
+} out String is {
     sg: typing.singletons.get key: tid
     if sg.some when sg.instance.notZero then {
-        sw: writtenTypeName :reg :typing :ast tid: sg.instance
+        sw: spellType :reg :typing :ast tid: sg.instance :qualified :site
         sw.append "."
         sw.append (zast.nameTextAt :ast ref: sg.param)
         return sw
     }
     org: reg.genericOriginOf :tid
-    if org.isZero then return (reg.nameOf :tid)
+    if org.isZero then {
+        if qualified then return (qualifiedLeafName :reg :typing :tid :site)
+        return (reg.nameOf :tid)
+    }
     tdecl: typing.declIdOfType typeId: org
     pns: reg.genericParamNamesOf :tdecl
-    r: "(\{reg.nameViewOf tid: org}"
+    r: "(\{spellType :reg :typing :ast tid: org :qualified :site}"
     n: shownArgCount :reg :tdecl spec: tid
     i: u64
     for i < n loop {
@@ -1016,7 +1045,7 @@ writtenTypeName: function {
         ) case valueArg then {
             at = reg.valueArgText :tdecl paramName: (reg.genericParamNameAt :tdecl :i) bits: a
         } case typeArg then {
-            at = writtenTypeName :reg :typing :ast tid: a
+            at = spellType :reg :typing :ast tid: a :qualified :site
         }
         if i > 0 when i < pns.length then {
             pt: zast.nameTextAt :ast ref: (pns.get :i)
@@ -1028,6 +1057,48 @@ writtenTypeName: function {
     }
     r.append ")"
     return r
+}
+
+# qualifiedLeafName -- type `tid`, no instance, as a program in unit `site`
+# writes it: a type another unit declares through the path of units that
+# reaches it (`io.File`, `z.build.oskind`); a core-language one -- the system's,
+# core's, collections' -- bare where its bare name reaches it (bareNameReaches),
+# else through `core` when core re-exports it, else through its own unit.
+qualifiedLeafName: function {
+    reg: ztypes.ZTypeRegistry.view
+    typing: ztyping.ZTyping.view
+    tid: ztypes.tid
+    site: ztypes.declid
+} out String is {
+    disp: reg.nameOf :tid
+    if disp.length == 0 then return disp
+    path: numerics.unitPathOfTid :reg :typing :tid
+    if path.length == 0 then return disp
+    if (isCoreLanguageUnit :typing unitDecl: (resolve.unitDeclOfTid :reg :typing :tid)) then {
+        if (bareNameReaches :reg :typing :site base: tid) then return disp
+        if (coreReexports :reg :typing base: tid) then path = "core".string
+    }
+    return "\{path}.\{disp}"
+}
+
+# coreReexports -- core names the type under its own name, so `core.<name>`
+# reaches it from any unit
+coreReexports: function {
+    reg: ztypes.ZTypeRegistry.view typing: ztyping.ZTyping.view base: ztypes.tid
+} out bool is {
+    bd: templateDeclOf :reg :typing tid: base
+    if bd.isZero or typing.coreUnitRoot.isZero then return false
+    nameId: (typing.decls.get i: bd).name
+    return (typing.declFindChild parentDeclId: typing.coreUnitRoot :nameId).notZero
+}
+
+# isCoreLanguageUnit -- the unit is one whose types a program spells bare: the
+# system, core and collections units, by their declarations
+isCoreLanguageUnit: function {typing: ztyping.ZTyping.view unitDecl: ztypes.declid} out bool is {
+    if unitDecl.isZero then return false
+    if unitDecl == typing.systemUnitRoot then return true
+    if unitDecl == typing.coreUnitRoot then return true
+    return unitDecl == typing.collectionsUnitRoot
 }
 
 # shownArgCount -- how many of instance `spec`'s arguments its spelling writes:
