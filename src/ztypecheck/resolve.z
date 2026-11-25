@@ -451,17 +451,6 @@ resolveAtomType: function {
     return (resolveNamedTypeId :st :scope :ast :unitDecl :nameId :thisName :nid)
 }
 
-# monoArgName -- a pending-instantiation argument's recorded name: `this` and
-# `type` map to the enclosing type (the recordResolvedName mapping); "" when
-# there is no enclosing type.
-monoArgName: function {
-    ast: Ast.view an: StringView anId: zast.nameid thisName: zast.nameid
-} out String is {
-    if anId == zast.wellKnown.slot.wkThis then return (zast.nameTextCopy :ast ref: thisName)
-    if anId == zast.wellKnown.slot.wkType then return (zast.nameTextCopy :ast ref: thisName)
-    return an.string
-}
-
 # resolveDottedArgTid -- a unit-qualified dotted generic argument
 # (ztypes.zlockstate): descend the member in its defining unit. Marker /
 # non-unit dotted shapes resolve 0 (the caller skips the record).
@@ -558,6 +547,16 @@ resolveMonoRefInline: function {
     return ztypes.tid.zero
 }
 
+# monoArgNameId -- a pending-instantiation argument's name: `this` and `type`
+# name the enclosing type (the recordResolvedName mapping), and nothing when
+# there is none.
+monoArgNameId: function {anId: zast.nameid thisName: zast.nameid} out zast.nameid is {
+    if (
+        (anId == zast.wellKnown.slot.wkThis) or (anId == zast.wellKnown.slot.wkType)
+    ) then return thisName
+    return anId
+}
+
 # monoRefArgTid -- resolve one mono type-reference argument to a tid. An unlabelled
 # argument is a dotted type-ref; a labelled one names a type in the enclosing
 # declaration's scope, its own unit, or a builtin. 0 with okOut false when it
@@ -570,12 +569,12 @@ monoRefArgTid: function {
     thisName: zast.nameid
     enclDecl: ztypes.declid
     arg: argref
-    an: StringView
     okOut: ListVal bool
 } out ztypes.tid is {
     aid: ztypes.tid
     allOk: true
-    if an.length == 0 then {
+    anId: atomNameId :ast n: (ast.nodes.getView i: arg.operation)
+    if anId.isZero then {
         aid = resolveDottedArgTid :st :scope :ast nid: arg.operation
         if aid.isZero then aid = (
             typeref.singletonPathArg
@@ -605,27 +604,21 @@ monoRefArgTid: function {
             }
         }
     } else {
-        anc: (
-            monoArgName
-            :ast
-            :an
-            anId: (atomNameId :ast n: (ast.nodes.getView i: arg.operation))
-            :thisName
-        )
-        if anc.length == 0 then {
+        ancId: monoArgNameId :anId :thisName
+        if ancId.isZero then {
             allOk = false
         } else {
             if enclDecl.notZero when (
                 st.reg.isGenericParamOf
                 tdecl: enclDecl
-                name: (nameIdOf :ast name: anc.stringView)
+                name: ancId
             ) then {
                 (
                     declare.recordGenericParamRef
                     :st
                     nid: arg.operation
                     scope: enclDecl
-                    name: (nameIdOf :ast name: anc.stringView)
+                    name: ancId
                 )
                 aid = (
                     ztypes.tid.create
@@ -634,7 +627,7 @@ monoRefArgTid: function {
                         :st
                         :ast
                         tdecl: enclDecl
-                        nameId: (nameIdOf :ast name: anc.stringView)
+                        nameId: ancId
                     )
                 )
             }
@@ -648,7 +641,7 @@ monoRefArgTid: function {
                         :st
                         :ast
                         :scope
-                        nameId: (atomNameId :ast n: (ast.nodes.getView i: arg.operation))
+                        nameId: anId
                         nid: arg.operation
                     )
                 )
@@ -657,16 +650,16 @@ monoRefArgTid: function {
             # not yet declared -- the ladder walk sees only
             # declared defs and would fall through to a
             # same-named stdlib type (resolveAtomType's rule)
-            duo: (conform.definingSiteFor :st :scope :ast :unitDecl name: anc.stringView).defUnit
+            duo: (definingSiteForId :st :ast :unitDecl :scope nameId: ancId).defUnit
             if aid.isZero when duo == unitDecl then {
-                aid = descendNamed :st :scope :ast unitDecl: duo name: anc.stringView
+                aid = descendNamedId :st :scope :ast unitDecl: duo nameId: ancId
             }
             if aid.isZero then {
-                ao: bodies.walkLookupTyperef :st :scope :ast :unitDecl base: anc.stringView
+                ao: walkLookupTyperefById :st :scope :ast :unitDecl baseId: ancId
                 aid = ao.or d: ztypes.tid.zero
             }
             if aid.isZero when duo.notZero then {
-                aid = descendNamed :st :scope :ast unitDecl: duo name: anc.stringView
+                aid = descendNamedId :st :scope :ast unitDecl: duo nameId: ancId
             }
             if aid.isZero then allOk = false
         }
