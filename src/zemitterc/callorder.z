@@ -4160,6 +4160,30 @@ emitNativeCreate: function {
     )
 }
 
+# noRowCall -- a call to the native free function `fid`, which its unit has no
+# row for: a placeholder when the declaration was refused for that
+# (refusedNative), so the call adds no second error; else "", for the natives
+# with no row of their own (print, panic), which have legs of their own
+noRowCall: function {
+    prog: Program.view ctx: Ctx fid: ztypes.tid facts: exprfacts.borrow
+} out String is {
+    if (refusedNative :prog :ctx :fid).not then return "".string
+    return (stating :facts from: values.failedFacts text: "0".string)
+}
+
+# refusedNative -- the native function `fid`'s declaration was refused for the
+# row its unit lacks (checkNativesResolve, which runs before any body is
+# emitted): a call to it is not reported a second time
+refusedNative: function {prog: Program.view ctx: Ctx.view fid: ztypes.tid} out bool is {
+    d: prog.typing.declIdOfType typeId: fid
+    if d.isZero then return false
+    dn: (prog.typing.decls.get i: d).node
+    for each e: ctx.emitErrors loop {
+        if e.nodeid == dn when e.err == zast.err.noNativeImpl then return true
+    }
+    return false
+}
+
 # emitNativeFreeFnCall -- ANY call (dotted `io.remove ...`, a bare sibling
 # `remove ...` inside the unit, or a call through a hidden subunit's name
 # `arith.addVV ...`) whose callee `fid` RESOLVED to an `is native` FREE function
@@ -4194,7 +4218,7 @@ emitNativeFreeFnCall: function {
     if duo.length == 0 then return "".string
     rowKey: rowNameOfFn :prog pieces: ctx.pieces :fid
     row: ctx.pieces.rows.ofName n: rowKey
-    if row == 0 then return "".string
+    if row == 0 then return (noRowCall :prog :ctx :fid :facts)
     r: ctx.pieces.rows.rows.get i: row
     un: duo.string
     # a function a templated class implements is the template function of the
