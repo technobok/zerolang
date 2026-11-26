@@ -3668,7 +3668,8 @@ Analysis: class {
 
     # emitSuf -- L005: a redundant numeric suffix. The safe fix removes the `.` and the type
     # name (e.g. `5.i32` -> `5`); the context already pins the type.
-    emitSuf: function {t: this ln: u32 col: u32 tname: StringView} is {
+    emitSuf: function {t: this ast: Ast.view ln: u32 col: u32 nameId: zast.nameid} is {
+        tname: zast.nameTextAt :ast ref: nameId
         srcOwned: t.source.copy
         sv: srcOwned.stringView
         lineStart: lineStartIndex src: sv
@@ -3705,14 +3706,14 @@ Analysis: class {
         # literal from either side, so only there can the lhs suffix be
         # redundant
         if isCmp then {
-            ls: operandSuffix :ast n: lhs
-            if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringView :st) then {
-                t.emitSuf ln: ls.line col: ls.col tname: ls.tname.stringView
+            ls: operandSuffix :ast n: lhs :st
+            if ls.tid.notZero when (isAnchor :ast n: rhs tid: ls.tid :st) then {
+                t.emitSuf :ast ln: ls.line col: ls.col nameId: ls.nameId
             }
         }
-        rs: operandSuffix :ast n: rhs
-        if rs.tname.length > 0 when (isAnchor :ast n: lhs tname: rs.tname.stringView :st) then {
-            t.emitSuf ln: rs.line col: rs.col tname: rs.tname.stringView
+        rs: operandSuffix :ast n: rhs :st
+        if rs.tid.notZero when (isAnchor :ast n: lhs tid: rs.tid :st) then {
+            t.emitSuf :ast ln: rs.line col: rs.col nameId: rs.nameId
         }
     }
 
@@ -3724,12 +3725,9 @@ Analysis: class {
         value: astnode.view
         st: zenv.ZSymbolTable.view
     } is {
-        vs: operandSuffix :ast n: value
-        if vs.tname.length > 0 then {
-            tn: typeNameOfNode n: topath :st
-            if tn.length > 0 when tn.stringView == vs.tname then {
-                t.emitSuf ln: vs.line col: vs.col tname: vs.tname.stringView
-            }
+        vs: operandSuffix :ast n: value :st
+        if vs.tid.notZero when (typeIdOfNode n: topath :st) == vs.tid then {
+            t.emitSuf :ast ln: vs.line col: vs.col nameId: vs.nameId
         }
     }
 
@@ -4039,8 +4037,8 @@ Analysis: class {
         if arg.namedoperation then {
             an: zast.nameTextAt :ast ref: arg.name
             if an.length > 0 then {
-                s: operandSuffix :ast n: (ast.nodes.getView i: arg.operation)
-                if s.tname.length > 0 then {
+                s: operandSuffix :ast n: (ast.nodes.getView i: arg.operation) :st
+                if s.tid.notZero then {
                     # a generic-origin param never anchors a defix: the
                     # suffix is what SELECTS the instantiation (the mono's
                     # concrete param type was inferred from this argument)
@@ -4052,11 +4050,8 @@ Analysis: class {
                         if opto.some when (st.reg.isTypeParamOf tid: opto) then return
                     }
                     pto: st.typing.declChildOfId parentTypeId: calleeType nameId: arg.name
-                    if pto.some then {
-                        ptn: st.reg.nameOf tid: pto
-                        if ptn.stringView == s.tname then {
-                            t.emitSuf ln: s.line col: s.col tname: s.tname.stringView
-                        }
+                    if pto.some when pto == s.tid then {
+                        t.emitSuf :ast ln: s.line col: s.col nameId: s.nameId
                     }
                 }
             }
@@ -4065,18 +4060,20 @@ Analysis: class {
 
     # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
     # fixes.
-    sufNamedArgReturn: function {t: this ast: Ast.view arg: astnode.view rtName: StringView} is {
+    sufNamedArgReturn: function {
+        t: this ast: Ast.view arg: astnode.view rtTid: ztypes.tid st: zenv.ZSymbolTable.view
+    } is {
         match (
             arg
         ) case namedoperation then {
-            s: operandSuffix :ast n: (ast.nodes.getView i: arg.operation)
-            if s.tname.length > 0 when s.tname.stringView == rtName then {
-                t.emitSuf ln: s.line col: s.col tname: s.tname.stringView
+            s: operandSuffix :ast n: (ast.nodes.getView i: arg.operation) :st
+            if s.tid.notZero when s.tid == rtTid then {
+                t.emitSuf :ast ln: s.line col: s.col nameId: s.nameId
             }
         } else {
-            s8: operandSuffix :ast n: arg
-            if s8.tname.length > 0 when s8.tname.stringView == rtName then {
-                t.emitSuf ln: s8.line col: s8.col tname: s8.tname.stringView
+            s8: operandSuffix :ast n: arg :st
+            if s8.tid.notZero when s8.tid == rtTid then {
+                t.emitSuf :ast ln: s8.line col: s8.col nameId: s8.nameId
             }
         }
     }
@@ -4096,15 +4093,10 @@ Analysis: class {
         isRet: false
         if ck.some when ck.returnCall then isRet = true
         if isRet then {
-            rtName: typeNameOfOptAt :ast oId: funcretId :st
-            if rtName.length > 0 then {
+            rtTid: typeIdOfOptAt :ast oId: funcretId :st
+            if rtTid.notZero then {
                 for each aId: (zast.kidsOf :ast span: arguments) loop {
-                    (
-                        t.sufNamedArgReturn
-                        :ast
-                        arg: (ast.nodes.getView i: aId)
-                        rtName: rtName.stringView
-                    )
+                    t.sufNamedArgReturn :ast arg: (ast.nodes.getView i: aId) :rtTid :st
                 }
             }
         } else {
@@ -6235,37 +6227,54 @@ literalFitsBase: function {numstr: StringView} out bool is {
     return pv.ival <= iMax
 }
 
-# SufRec -- a candidate suffix: the suffix type name ("" when not a candidate) and the
-# position of the suffix's type token.
-SufRec: class {
+# sufrec -- a candidate suffix: the name it spells, the system scalar that names
+# (0 when the operand is no candidate) and the position of its type token.
+sufrec: record {
     # the type name the suffix spelled
-    tname: String
+    nameId: zast.nameid
+    # the scalar the suffix converts to: the system's, whatever a unit names
+    # the same
+    tid: ztypes.tid
     # the line the suffix is on
     line: u32
     # the column it starts at
     col: u32
 }
 
+# noSuf -- the sufrec of an operand that is no candidate
+noSuf: function out sufrec is {
+    return (sufrec nameId: zast.nameid tid: ztypes.tid line: 0 col: 0)
+}
+
 # operandSuffix -- report whether the operand is a redundant-suffix dotted path,
-# with the type token's position.
-operandSuffix: function {ast: Ast.view n: astnode.view} out SufRec is {
+# with the scalar the suffix names and the type token's position.
+operandSuffix: function {ast: Ast.view n: astnode.view st: zenv.ZSymbolTable.view} out sufrec is {
     match (
         n
     ) case dottedpath then {
-        cn: zast.atomNameText :ast n: (ast.nodes.getView i: n.child)
-        if (ztypecheck.isNumericTypeName name: cn.stringView).not then {
-            return (SufRec tname: "".string line: 0 col: 0)
+        cid: zast.atomNameIdOf n: (ast.nodes.getView i: n.child)
+        if cid.isZero then return noSuf
+        if (ztypecheck.isNumericTypeName name: (zast.nameTextAt :ast ref: cid).stringView
+        ).not then {
+            return noSuf
         }
-        pn: zast.atomNameText :ast n: (ast.nodes.getView i: n.parent)
-        if pn.length == 0 then return (SufRec tname: "".string line: 0 col: 0)
-        if (literalFitsBase numstr: pn.stringView).not then {
-            return (SufRec tname: "".string line: 0 col: 0)
-        }
+        pid: zast.atomNameIdOf n: (ast.nodes.getView i: n.parent)
+        if pid.isZero then return noSuf
+        if (literalFitsBase numstr: (zast.nameTextAt :ast ref: pid).stringView
+        ).not then return noSuf
         ci: nodeInfoOf n: (ast.nodes.getView i: n.child)
-        return (SufRec tname: cn line: ci.line col: ci.col)
+        return (sufrec nameId: cid tid: (suffixScalarTid :st nameId: cid) line: ci.line col: ci.col)
     } else {
-        return (SufRec tname: "".string line: 0 col: 0)
+        return noSuf
     }
+}
+
+# suffixScalarTid -- the system scalar a numeric suffix names (`5.u8` converts to
+# system's u8 whatever a unit names `u8`); 0 when the system declares none
+suffixScalarTid: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out ztypes.tid is {
+    sysT: st.typing.declTypeOf declId: st.typing.systemUnitRoot
+    if sysT.isZero then return sysT
+    return ((st.typing.declChildOfId parentTypeId: sysT :nameId).or d: ztypes.tid.zero)
 }
 
 # isNodeConst -- the node carries a compile-time const value.
@@ -6273,26 +6282,19 @@ isNodeConst: function {nid: zast.nodeid st: zenv.ZSymbolTable.view} out bool is 
     return (st.typing.nodeConst.has key: nid)
 }
 
-# typeNameOfNode -- the resolved type name of a node ("" when unresolved).
-typeNameOfNode: function {n: astnode.view st: zenv.ZSymbolTable.view} out String is {
-    info: nodeInfoOf :n
-    to: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: info.id
-    if to.notZero then {
-        return (st.reg.nameOf tid: to)
-    } else {
-        return "".string
-    }
+# typeIdOfNode -- the resolved type of a node (0 when unresolved).
+typeIdOfNode: function {n: astnode.view st: zenv.ZSymbolTable.view} out ztypes.tid is {
+    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeInfoOf :n).id)
 }
 
-# typeNameOfOptAt -- the id-taking entry (0 = absent).
-typeNameOfOptAt: function {
+# typeIdOfOptAt -- the id-taking entry (0 = absent).
+typeIdOfOptAt: function {
     ast: Ast.view
     oId: zast.nodeid
     st: zenv.ZSymbolTable.view
-} out String is {
-    if oId.isZero then return "".string
-    o: ast.nodes.getView i: oId
-    return (typeNameOfNode n: o :st)
+} out ztypes.tid is {
+    if oId.isZero then return ztypes.tid.zero
+    return (typeIdOfNode n: (ast.nodes.getView i: oId) :st)
 }
 
 # litShapedSuf -- the node is a numeric literal, bare or wearing a width
@@ -6315,31 +6317,19 @@ litShapedSuf: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# isAnchor -- the node is a concrete non-literal value of numeric type `tname`, a genuine
-# type anchor that makes a same-type literal suffix redundant.
+# isAnchor -- the node is a concrete non-literal value of the scalar `tid`, a genuine
+# type anchor that makes a literal suffix naming that scalar redundant.
 isAnchor: function {
     ast: Ast.view
     n: astnode.view
-    tname: StringView
+    tid: ztypes.tid
     st: zenv.ZSymbolTable.view
 } out bool is {
     if (litShapedSuf :ast :n) then return false
-    info: nodeInfoOf :n
-    nid: info.id
+    nid: (nodeInfoOf :n).id
     to: ztyping.nodeTypeAt tbl: st.typing.nodeType :nid
-    if to.notZero then {
-        zhit: false
-        znm: String
-        name: st.reg.nameOf tid: to
-        zhit = true
-        znm = name.take
-        if zhit.not then return false
-        if (znm.stringView == tname).not then return false
-        if (isNodeConst :nid :st) then return false
-        return true
-    } else {
-        return false
-    }
+    if to.isZero or (to != tid) then return false
+    return (isNodeConst :nid :st).not
 }
 
 # bodysite -- where A006 first saw a body's shape
