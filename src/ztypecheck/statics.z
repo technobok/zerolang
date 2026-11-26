@@ -3822,26 +3822,12 @@ constOfMatch: function {
     return r
 }
 
-# constOwnerDeclFor -- the DECLARATION a constant named `defName` is a member
+# constOwnerDeclForId -- the DECLARATION a constant named `nameId` is a member
 # of. A name written inside a namespace resolves against that namespace first
 # and falls back to the file unit, which is the chain spec.pdoc describes for an
 # inline unit. The TYPE and VALUE channels must agree about this, so both ask
 # here rather than each deciding for itself -- and both facts the fold needs,
 # the owner's type id and the constant's own def node, come off this one answer.
-constOwnerDeclFor: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    defName: StringView
-} out ztypes.declid is {
-    dn9: zast.poolFind pool: ast.names text: defName
-    return (constOwnerDeclForId :st :scope :unitDecl nameId: dn9)
-}
-
-# constOwnerDeclForId -- the walk itself, asked BY ID. A caller that already
-# holds the name id -- a use site does, the atom carries it -- would otherwise
-# pay a pool search to hand over text this reduces straight back to an id.
 constOwnerDeclForId: function {
     st: zenv.ZSymbolTable.view
     unitDecl: ztypes.declid
@@ -6717,6 +6703,13 @@ listDeclRow: function {ast: Ast st: zenv.ZSymbolTable declId: ztypes.declid} out
     return v.aggId
 }
 
+# constructionHint -- the hint a unit-level constant written as a construction
+# gets: build the value where a function runs, or make the constant one
+constructionHint: function {ast: Ast.view defNameId: zast.nameid} out String is {
+    dn: zast.nameTextAt :ast ref: defNameId
+    return "construct it inside a function, or make '\{dn}' a function that returns the value"
+}
+
 # resolveDottedConstantDef -- a unit-level constant whose value is a dotted path.
 # That is a width-suffixed literal (`1.u32`, the child naming the type), a variant
 # arm read (`false: bool.false` -- a compile-time value, the shape core.z uses 41
@@ -6726,7 +6719,7 @@ resolveDottedConstantDef: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defn: dpref
     sfLit: StringView
     sfTy: StringView
@@ -6844,7 +6837,7 @@ resolveDottedConstantDef: function {
         }
         if isCtor then {
             dm: "a unit-level constant takes a literal value, not a construction".string
-            dh: "construct it inside a function, or make '\{defName}' a function that returns the value"
+            dh: constructionHint :ast :defNameId
             (
                 reportUnitConstantShape
                 :st
@@ -6966,7 +6959,7 @@ resolveCalledConstantDef: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defn: callref
 } is {
     # the callee's root name
@@ -7056,7 +7049,7 @@ resolveCalledConstantDef: function {
                     :st
                     :unitDecl
                     :scope
-                    :defName
+                    :defNameId
                     :defn
                 ) then cbu = true
                 # an instantiation refused for its arguments is reported there
@@ -7090,7 +7083,7 @@ resolveCalledConstantDef: function {
         if cbu.not when (staticValueCall :st :scope :ast :unitDecl :defn) then cbu = true
         if cbu.not then {
             cm: "a unit-level constant takes a literal value, not a construction".string
-            ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
+            ch: constructionHint :ast :defNameId
             (
                 reportUnitConstantShape
                 :st
@@ -7113,7 +7106,7 @@ resolveDottedConstantRead: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defnId: zast.nodeid
 } is {
     if (typeref.refuseMisplacedImplement :st :ast nid: defnId) then return
@@ -7160,7 +7153,7 @@ resolveDottedConstantRead: function {
     }
     # a path to an instance's numeric generic parameter (`X: B5.cap`) names
     # its singleton type: an alias, which resolveAliasKey registers
-    xd: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    xd: declOfUnitDef :st :scope :unitDecl nameId: defNameId
     if (singletonPathAlias :st :ast declId: xd :scope).notZero then return
     if sfLit.length > 0 when sfTy.length > 0 when lookupUnit.notZero then {
         (
@@ -7169,7 +7162,7 @@ resolveDottedConstantRead: function {
             :st
             unitDecl: lookupUnit
             scope: (if qUnitPath.isZero then scope else lookupUnit)
-            :defName
+            :defNameId
             defn: dr
             sfLit: sfLit.stringView
             sfTy: sfTy.stringView
@@ -7185,7 +7178,7 @@ resolveConstantDef: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defnId: zast.nodeid
 } is {
     # AN INFIX CALL IS A BINARY OPERATION, NOT A CONSTRUCTION. `COMBINED:
@@ -7210,7 +7203,7 @@ resolveConstantDef: function {
     } case dottedpath then {
         # a width-suffixed numeric literal (`1.u32`) is a dotted path over the
         # literal, not an atom: the child names the constant's type
-        resolveDottedConstantRead :ast :st :unitDecl :scope :defName :defnId
+        resolveDottedConstantRead :ast :st :unitDecl :scope :defNameId :defnId
     } case call then {
         # A construction is not a literal. A generic-unit instantiation
         # (`intmath: (genmath t: i64)`) stays legal, and the test here is that
@@ -7219,7 +7212,7 @@ resolveConstantDef: function {
         # (functiondef, objectdef, unitdef, listblock) reach this leg too and
         # must never be reported.
         cdr: callRefAt :ast nid: defnId
-        resolveCalledConstantDef :ast :st :unitDecl :scope :defName defn: cdr
+        resolveCalledConstantDef :ast :st :unitDecl :scope :defNameId defn: cdr
     } else null
 }
 
@@ -7242,13 +7235,12 @@ constRegisterValueType: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     v: ztypes.cval
 } is {
     if v.kind.none then return
-    defNameId: zast.poolFind pool: ast.names text: defName
     if defNameId.isZero then return
-    ownerDecl: constOwnerDeclFor :st :scope :ast :unitDecl :defName
+    ownerDecl: constOwnerDeclForId :st :scope :unitDecl nameId: defNameId
     constRegisterValueTypeAt :st :scope :ast :ownerDecl nameId: defNameId :v
 }
 
@@ -7347,8 +7339,8 @@ instantiatedAliasFold: function {
     if own.isZero then return false
     unm: unitRootOfDecl typing: st.typing :declId
     if unm.isZero then return false
-    dnm: zast.nameTextCopy :ast ref: (st.typing.declNameOf :declId)
-    if dnm.length == 0 then return false
+    dnm: st.typing.declNameOf :declId
+    if dnm.isZero then return false
     tdc: callRefAt :ast nid: opId
     # a value that names its own definition, directly or through another
     # (`foo: bar foo`, `Strs: (List Strs)`, `foo: (foo n: 3)`), re-enters here
@@ -7381,7 +7373,7 @@ instantiatedAliasFold: function {
         :st
         unitDecl: unm
         scope: own
-        defName: dnm.stringView
+        defNameId: dnm
         defn: cdr
     )
     st.walk.aliasFoldsOpen.pop
@@ -7574,7 +7566,7 @@ resolveConstantMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defnId: zast.nodeid
 } is {
     # a template's constant over its numeric parameter is each instance's
@@ -7583,13 +7575,13 @@ resolveConstantMember: function {
         forInstancesOnly
         :st
         :ast
-        owner: (constOwnerDeclFor :st :scope :ast :unitDecl :defName)
+        owner: (constOwnerDeclForId :st :scope :unitDecl nameId: defNameId)
         :defnId
     ) then return
     constFailClear :st
-    resolveConstantDef :st :scope :ast :unitDecl :defName :defnId
-    cvv: constValueOfMember :st :scope :ast :unitDecl :defName
-    constRegisterValueType :st :scope :ast :unitDecl :defName v: cvv
+    resolveConstantDef :st :scope :ast :unitDecl :defNameId :defnId
+    cvv: constValueOfMemberId :st :scope :ast :unitDecl nameId: defNameId
+    constRegisterValueType :st :scope :ast :unitDecl :defNameId v: cvv
     if (checkConstantMethodShape :st :scope :ast :unitDecl nid: defnId) then constFailClear :st
     reportPendingConstFail :st
     if cvv.kind.none then reportMissingQualifiedMember :st :scope :ast :defnId
@@ -7599,8 +7591,8 @@ resolveConstantMember: function {
             :st
             :ast
             :unitDecl
-            ownerDecl: (constOwnerDeclFor :st :scope :ast :unitDecl :defName)
-            nameId: (zast.poolFind pool: ast.names text: defName)
+            ownerDecl: (constOwnerDeclForId :st :scope :unitDecl nameId: defNameId)
+            nameId: defNameId
             :defnId
         )
     }
