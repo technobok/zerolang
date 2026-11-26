@@ -381,10 +381,10 @@ tmplParsed: function {ctx: Ctx key: textkey} out rtid is {
 }
 
 # newUnitReq -- a requirement of unit `path` setting nothing yet
-newUnitReq: function {path: String.take} out UnitReq is {
+newUnitReq: function {path: reqpath} out UnitReq is {
     return (
         UnitReq
-        path: path.take
+        :path
         feature: String
         nocc: String
         arch: String
@@ -644,8 +644,8 @@ newRowWalk: function out RowWalk is {
             held: Set String
             placed: Set String
             replaced: Set String
-            linkReplaced: Set String
-            sourceReplaced: Set String
+            linkReplaced: ListVal reqpath
+            sourceReplaced: ListVal reqpath
         )
         frags: String
         boxes: String
@@ -748,20 +748,20 @@ servedRequirements: function {
     owner: StringView
 } is {
     for each l: im.links loop {
-        r: newUnitReq path: (servedSubunit sub: l.subunit.stringView :owner)
+        r: newUnitReq path: (reqPathOf pieces: ctx.pieces sub: l.subunit.stringView :owner)
         r.os = servedOs xs: l.os
         r.link = l.library.string
         w.requirement :ctx req: r.take fact: l.fact.stringView
     }
     for each s: im.sources loop {
-        r: newUnitReq path: (servedSubunit sub: s.subunit.stringView :owner)
+        r: newUnitReq path: (reqPathOf pieces: ctx.pieces sub: s.subunit.stringView :owner)
         r.os = servedOs xs: s.os
         r.csrc = s.path.string
         r.cdefs = servedList xs: s.defines
         w.requirement :ctx req: r.take fact: s.fact.stringView
     }
     for each f: im.refusals loop {
-        r: newUnitReq path: (servedSubunit sub: f.subunit.stringView :owner)
+        r: newUnitReq path: (reqPathOf pieces: ctx.pieces sub: f.subunit.stringView :owner)
         r.feature = f.feature.string
         r.nocc = servedCompilers xs: f.compilers
         r.arch = servedArchitectures xs: f.onlyArchitectures
@@ -903,9 +903,9 @@ RowWalk: class {
     requirement: function {t: this ctx: Ctx req: UnitReq.take fact: StringView} is {
         holds: true
         if req.link.length > 0 then {
-            holds = t.rf.requirementHolds :ctx link: true path: req.path.stringView :fact
+            holds = t.rf.requirementHolds :ctx link: true path: req.path :fact
         } else if req.csrc.length > 0 then {
-            holds = t.rf.requirementHolds :ctx link: false path: req.path.stringView :fact
+            holds = t.rf.requirementHolds :ctx link: false path: req.path :fact
         }
         if holds then ctx.pieces.unitReqs.append req.take
     }
@@ -1062,7 +1062,12 @@ checkedUnit: function {
     for each l: (zdata.itemsOf :f v: (checkedField :u name: "links")) loop {
         r: (
             newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: l name: "subunit").stringView :owner)
+            path: (
+                reqPathOf
+                pieces: ctx.pieces
+                sub: (checkedText :u v: l name: "subunit").stringView
+                :owner
+            )
         )
         r.os = checkedArms :u v: l name: "os"
         r.link = checkedText :u v: l name: "library"
@@ -1071,7 +1076,12 @@ checkedUnit: function {
     for each s: (zdata.itemsOf :f v: (checkedField :u name: "sources")) loop {
         r: (
             newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: s name: "subunit").stringView :owner)
+            path: (
+                reqPathOf
+                pieces: ctx.pieces
+                sub: (checkedText :u v: s name: "subunit").stringView
+                :owner
+            )
         )
         r.os = checkedArms :u v: s name: "os"
         r.csrc = checkedText :u v: s name: "path"
@@ -1081,7 +1091,12 @@ checkedUnit: function {
     for each x: (zdata.itemsOf :f v: (checkedField :u name: "refusals")) loop {
         r: (
             newUnitReq
-            path: (servedSubunit sub: (checkedText :u v: x name: "subunit").stringView :owner)
+            path: (
+                reqPathOf
+                pieces: ctx.pieces
+                sub: (checkedText :u v: x name: "subunit").stringView
+                :owner
+            )
         )
         r.feature = checkedText :u v: x name: "feature"
         r.nocc = checkedArms :u v: x name: "compilers"
@@ -1597,10 +1612,23 @@ servedList: function {xs: staticlist text} out String is {
     return r
 }
 
-# servedSubunit -- `<unit>` or `<unit>.<subunit>` for a requirement
-servedSubunit: function {sub: StringView owner: StringView} out String is {
-    if sub.length == 0 then return owner.string
-    return "\{owner}.\{sub}"
+# reqPathOf -- the unit a requirement of file unit `owner` is of: the unit, or
+# its subunit `sub` when one is named, the names interned in the piece tables'
+# pool
+reqPathOf: function {pieces: PieceState owner: StringView sub: StringView} out reqpath is {
+    subId: zast.nameid
+    if sub.length > 0 then subId = pieces.demands.names.intern s: sub
+    return (reqpath owner: (pieces.demands.names.intern s: owner) sub: subId)
+}
+
+# reqPathText -- a requirement's unit as a message names it, `system.quadfloat`
+reqPathText: function {pieces: PieceState.view path: reqpath} out String is {
+    r: (pieces.demands.nameText id: path.owner).string
+    if path.sub.notZero then {
+        r.append "."
+        r.append (pieces.demands.nameText id: path.sub)
+    }
+    return r
 }
 
 # servedOs -- operating systems by their arm names, comma-separated
@@ -1673,10 +1701,9 @@ RowFacts: class {
     placed: Set String
     # the keys a variant under a held fact took, in the file being read
     replaced: Set String
-    # the unit paths whose links, and whose sources, a variant under a held
-    # fact took
-    linkReplaced: Set String
-    sourceReplaced: Set String
+    # the units whose links, and whose sources, a variant under a held fact took
+    linkReplaced: ListVal reqpath
+    sourceReplaced: ListVal reqpath
 } as {
     # applies -- whether a row is recorded: a variant under a fact when the fact
     # holds; a plain row unless a variant of its key replaced it. A variant under
@@ -1743,26 +1770,27 @@ RowFacts: class {
     # took it; one under a fact when the fact holds, which takes the plain ones
     # of its kind and path that follow. A fact no file declares is refused.
     requirementHolds: function {
-        :this ctx: Ctx link: bool path: StringView fact: StringView
+        :this ctx: Ctx link: bool path: reqpath fact: StringView
     } out bool is {
         if fact.length == 0 then {
-            if link then return (this.linkReplaced.has item: path.asString).not
-            return (this.sourceReplaced.has item: path.asString).not
+            if link then return (this.linkReplaced.contains item: path).not
+            return (this.sourceReplaced.contains item: path).not
         }
         if (this.declared.has item: fact.asString).not then {
+            pt: reqPathText pieces: ctx.pieces :path
             (
                 emitFail
                 :ctx
-                what: "nativec: a requirement of '\{path}' holds under '\{fact}', which no file declares"
+                what: "nativec: a requirement of '\{pt}' holds under '\{fact}', which no file declares"
                 line: 0
             )
             return false
         }
         if (this.held.has item: fact.asString).not then return false
         if link then {
-            this.linkReplaced.add item: path.string
+            this.linkReplaced.append path
         } else {
-            this.sourceReplaced.add item: path.string
+            this.sourceReplaced.append path
         }
         return true
     }

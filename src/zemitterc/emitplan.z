@@ -2914,9 +2914,9 @@ applyUnitReqs: function {
     # writes the context the rows live in
     refusals: List String
     for each r: ctx.pieces.unitReqs loop {
-        if (unitPathReached :prog path: r.path.stringView).not then continue
+        if (reqPathReached :prog pieces: ctx.pieces path: r.path).not then continue
         if (rowSpeaksForOs :r :os).not then continue
-        why: unitReqRefusal :r :fam :arch
+        why: unitReqRefusal pieces: ctx.pieces :r :fam :arch
         if why.length > 0 then {
             refusals.append why.take
         } else {
@@ -2953,15 +2953,19 @@ csrcLineOf: function {r: UnitReq.view} out String is {
 # unitReqRefusal -- why a reached unit cannot be built with this toolchain,
 # "" when it can: the compiler family is one its row names, or the target
 # architecture is not the one it names.
-unitReqRefusal: function {r: UnitReq.view fam: StringView arch: StringView} out String is {
+unitReqRefusal: function {
+    pieces: PieceState.view r: UnitReq.view fam: StringView arch: StringView
+} out String is {
     for each ncc: (r.nocc.stringView.split sep: ",") loop {
         if ncc == fam then {
-            m1: "'\{r.path}' needs \{r.feature} from the C compiler, and \{fam} has none; build with another compiler"
+            p1: nativepieces.reqPathText :pieces path: r.path
+            m1: "'\{p1}' needs \{r.feature} from the C compiler, and \{fam} has none; build with another compiler"
             return m1
         }
     }
     if r.arch.length > 0 when r.arch.stringView != arch then {
-        m2: "'\{r.path}' needs \{r.feature}, which only \{r.arch} targets have; this build targets \{arch}"
+        p2: nativepieces.reqPathText :pieces path: r.path
+        m2: "'\{p2}' needs \{r.feature}, which only \{r.arch} targets have; this build targets \{arch}"
         return m2
     }
     return String
@@ -2977,12 +2981,15 @@ appendLinkOnce: function {libs: List String lib: StringView} is {
     libs.append from: lib.string
 }
 
-# unitPathReached -- the program reaches the unit a dotted path names: some
-# declaration in it was demanded (ZTyping.unitsReached), and it declares
-# something native, as the unit the row was written for does and a user unit of
-# the same name does not
-unitPathReached: function {prog: Program.view path: StringView} out bool is {
-    cur: pathDeclOf :prog :path
+# reqPathReached -- the program reaches the unit a requirement is of (its file's
+# unit, or that unit's subunit): some declaration in it was demanded
+# (ZTyping.unitsReached), and it declares something native, as the unit the row
+# was written for does and a user unit of the same name does not
+reqPathReached: function {prog: Program.view pieces: PieceState.view path: reqpath} out bool is {
+    cur: segmentDecl :prog cur: ztypes.declid seg: (pieces.demands.nameText id: path.owner)
+    if cur.notZero when path.sub.notZero then {
+        cur = segmentDecl :prog :cur seg: (pieces.demands.nameText id: path.sub)
+    }
     if cur.isZero then return false
     if (prog.typing.unitsReached.has item: cur).not then return false
     return (declaresNative :prog did: cur)
@@ -3008,19 +3015,21 @@ factPathReached: function {prog: Program.view path: StringView} out bool is {
 # resolves; 0 otherwise
 pathDeclOf: function {prog: Program.view path: StringView} out ztypes.declid is {
     cur: ztypes.declid
-    first: true
     for each seg: (path.split sep: ".") loop {
-        nid: zast.poolFind pool: prog.ast.names text: seg
-        if nid.isZero then return ztypes.declid
-        if first then {
-            cur = ztypecheck.unitDeclOfName typing: prog.typing nameId: nid
-            first = false
-        } else {
-            cur = prog.typing.declFindChild parentDeclId: cur nameId: nid
-        }
+        cur = segmentDecl :prog :cur :seg
         if cur.isZero then return cur
     }
     return cur
+}
+
+# segmentDecl -- the declaration path segment `seg`, as the program spells it,
+# names: a file unit when no segment came before (`cur` 0), else a member of
+# `cur`; 0 when it names none
+segmentDecl: function {prog: Program.view cur: ztypes.declid seg: StringView} out ztypes.declid is {
+    nid: zast.poolFind pool: prog.ast.names text: seg
+    if nid.isZero then return ztypes.declid
+    if cur.isZero then return (ztypecheck.unitDeclOfName typing: prog.typing nameId: nid)
+    return (prog.typing.declFindChild parentDeclId: cur nameId: nid)
 }
 
 # true when the program defines a `main`.
