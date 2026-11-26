@@ -406,7 +406,7 @@ recordCanon: function {ctx: Ctx stem: StringView spec: StringView} is {
 # units' runtimes run in, comma-separated
 recordUnitOrder: function {pieces: PieceState order: StringView} is {
     for each ou: (order.split sep: ",") loop {
-        if ou.length > 0 then pieces.unitOrder.append from: ou.string
+        if ou.length > 0 then pieces.unitOrder.append (pieces.demands.names.intern s: ou)
     }
 }
 
@@ -1280,7 +1280,7 @@ registerFromFiles: function {
     k: u64
     for each u: users loop {
         if (
-            (ctx.pieces.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
+            u.nameId == zast.wellKnown.slot.unSystem
         ) then {
             sk = k
             found = true
@@ -1292,7 +1292,7 @@ registerFromFiles: function {
     if found.not then return
     sys: users.get i: sk
     fd: zdata.definition f: sys.file name: "foundation"
-    order: checkedUnitOrder pieces: ctx.pieces :users :sys :fd
+    order: checkedUnitOrder :users :sys :fd
     for each c: (checkedItems u: sys v: fd name: "conditions") loop (
         recordCondition
         :ctx
@@ -1398,7 +1398,6 @@ markTemplate: function {
 # `fd` names the units, then the files it does not name, system's first and the
 # rest by name, as servedUnitOrder orders the rows zc carries
 checkedUnitOrder: function {
-    pieces: PieceState
     users: (List UserImplementation).view
     sys: UserImplementation.view
     fd: ztypes.cval
@@ -1408,7 +1407,7 @@ checkedUnitOrder: function {
     if (named.contains item: sys.name).not then rest.append from: sys.name.copy
     sorted: List String
     for each u: users loop {
-        isSys: (pieces.nativeWords.slotOf text: u.name.stringView) == nativeWord.slot.unitSystem
+        isSys: u.nameId == zast.wellKnown.slot.unSystem
         if (named.contains item: u.name).not when isSys.not then sorted.append from: u.name.copy
     }
     sorted.sort
@@ -2805,9 +2804,12 @@ emitRuntimeUnits: function {
     buf: String.borrow
 } is {
     # the unit order is copied first: the runtime emitters below lend ctx
-    uos: List String
-    for each uo0: ctx.pieces.unitOrder loop uos.append uo0.copy
-    for each uo: uos loop emitRuntimeUnit :prog :ctx uname: uo.stringView :buf
+    uos: ListVal zast.nameid
+    for each uo0: ctx.pieces.unitOrder loop uos.append uo0
+    for each uo: uos loop {
+        u: (ctx.pieces.demands.nameText id: uo).string
+        emitRuntimeUnit :prog :ctx uname: u.stringView :buf
+    }
     emitUnorderedUnits :prog :ctx :buf
 }
 
@@ -3256,28 +3258,21 @@ emitUnorderedUnits: function {
     ctx: Ctx
     buf: String.borrow
 } is {
-    done: List String
+    done: ListVal zast.nameid
     i: u64
     n: ctx.pieces.rows.fragRows.length
     for i < n loop {
-        # an owned copy: the runtime emitter below lends ctx
-        u: (
-            ctx.pieces.demands.nameText
-            id: (ctx.pieces.rows.rows.get i: (ctx.pieces.rows.fragRows.get :i)).owner
-        ).string
+        ow: (ctx.pieces.rows.rows.get i: (ctx.pieces.rows.fragRows.get :i)).owner
         i = i + 1
-        skip: false
-        if (
-            (ctx.pieces.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
-        ) then skip = true
-        for each o: ctx.pieces.unitOrder loop {
-            if o.stringView == u then skip = true
-        }
-        for each d: done loop {
-            if d.stringView == u then skip = true
-        }
+        skip: (
+            (ow == ctx.pieces.preludeOwner) or
+            (ctx.pieces.unitOrder.contains item: ow) or
+            (done.contains item: ow)
+        )
         if skip.not then {
-            done.append from: u.copy
+            done.append ow
+            # an owned copy: the runtime emitter lends ctx
+            u: (ctx.pieces.demands.nameText id: ow).string
             emitRuntimeUnit :prog :ctx uname: u.stringView :buf
         }
     }
