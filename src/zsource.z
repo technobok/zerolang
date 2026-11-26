@@ -4233,7 +4233,6 @@ Analysis: class {
         t: this
         ast: Ast.view
         n: astnode.view
-        uname: StringView
         st: zenv.ZSymbolTable
         funcretId: zast.nodeid
     } is {
@@ -4302,17 +4301,17 @@ Analysis: class {
             t.negatedTwin :ast :n :st
         } case functiondef then {
             # the function's own return type is the funcret for everything below it
-            t.walkSufRet :ast retId: n.returntype :uname :st
-            t.walkSufIds :ast ids: n.parameters :uname :st funcretId: n.returntype
+            t.walkSufRet :ast retId: n.returntype :st
+            t.walkSufIds :ast ids: n.parameters :st funcretId: n.returntype
             t.sufFnDepth = t.sufFnDepth + 1
-            t.walkSufOptAt :ast oId: n.body :uname :st funcretId: n.returntype
+            t.walkSufOptAt :ast oId: n.body :st funcretId: n.returntype
             t.sufFnDepth = t.sufFnDepth - 1
-            t.walkSufIds :ast ids: n.asItems :uname :st funcretId: n.returntype
+            t.walkSufIds :ast ids: n.asItems :st funcretId: n.returntype
             return
         } else null
         sl9: zast.childIds :ast :n
         for each s9: sl9 loop {
-            t.walkSuf :ast n: (ast.nodes.getView i: s9) :uname :st :funcretId
+            t.walkSuf :ast n: (ast.nodes.getView i: s9) :st :funcretId
         }
     }
 
@@ -4321,12 +4320,11 @@ Analysis: class {
         t: this
         ast: Ast.view
         ids: zast.kidspan
-        uname: StringView
         st: zenv.ZSymbolTable
         funcretId: zast.nodeid
     } is {
         for each c: (zast.kidsOf :ast span: ids) loop {
-            t.walkSuf :ast n: (ast.nodes.getView i: c) :uname :st :funcretId
+            t.walkSuf :ast n: (ast.nodes.getView i: c) :st :funcretId
         }
     }
 
@@ -4335,23 +4333,20 @@ Analysis: class {
         t: this
         ast: Ast.view
         oId: zast.nodeid
-        uname: StringView
         st: zenv.ZSymbolTable
         funcretId: zast.nodeid
     } is {
         if oId.isZero then return
         o: ast.nodes.getView i: oId
-        t.walkSuf :ast n: o :uname :st :funcretId
+        t.walkSuf :ast n: o :st :funcretId
     }
 
     # a functiondef returntype doubles as its own funcret: this frame lets
     # the two arguments share one root without aliasing one source path
-    walkSufRet: function {
-        t: this ast: Ast.view retId: zast.nodeid uname: StringView st: zenv.ZSymbolTable
-    } is {
+    walkSufRet: function {t: this ast: Ast.view retId: zast.nodeid st: zenv.ZSymbolTable} is {
         if retId.isZero then return
         r: ast.nodes.getView i: retId
-        t.walkSuf :ast n: r :uname :st funcretId: retId
+        t.walkSuf :ast n: r :st funcretId: retId
     }
 
     # lintSuffixUnit -- run the suffix check over the linted unit.
@@ -4369,7 +4364,6 @@ Analysis: class {
             t.walkSuf
             ast: prog
             n: (prog.nodes.getView i: lu.op)
-            uname: lu.name.stringView
             :st
             funcretId: zast.nodeid
         )
@@ -5898,12 +5892,11 @@ lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
 # the open document's unit by that name.
 lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
     lu: LintedUnit op: zast.nodeid top: zast.nodeid name: uname.string names: List String
+    # the name as written, looked up once; the units are told apart by id
+    nid: zast.poolFind pool: prog.names text: uname
     for each uId: prog.units loop {
         un: prog.nodes.getView i: uId
-        if un.namedoperation then {
-            unm: zast.poolTextAt pool: prog.names ref: un.name
-            if unm.stringView == uname then lu.op = un.operation
-        }
+        if un.namedoperation when nid.notZero when un.name == nid then lu.op = un.operation
     }
     lu.top = lu.op
     lu.names.append uname.string
