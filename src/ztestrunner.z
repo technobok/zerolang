@@ -244,17 +244,46 @@ dumpArgv: function {
     return a
 }
 
-# withExtraArgs -- `argv` plus one element per non-empty line of `file`. An
-# error fixture that needs a compiler flag -- `--cc tcc`, to prove a refusal
-# fires without tcc installed -- names it in <name>.zcargs beside its
-# .err golden, the way a run case names its program's argv in <name>.args.
-# An absent file reads as empty, since slurp returns "" for an unreadable path.
-withExtraArgs: function {argv: (List String).take file: StringView} out List String is {
-    argsText: slurp path: file
-    argsView: argsText.stringView
-    for each line: argsView.lines loop {
-        if line.length > 0 then {
-            argv.append from: line.string
+# Flagged -- a program of a kind's flags file (tests/fixtures/<kind>_flags.zd)
+# and the flags it takes beyond the kind's own: an error fixture's `--cc tcc`,
+# to prove a refusal fires without tcc installed, a unit with no `main`
+# dumped as the eager tier models it
+Flagged: class {
+    name: String
+    args: List String
+}
+
+# errorFlagLists -- the ERROR kind's flags files under tests/fixtures: the
+# hand-written one, then the one constparitygen writes
+errorFlagLists: list { "errors_flags.zd" "cpar_flags.zd" } out staticlist StringView
+
+# readFlags -- the programs of the flags file at `path`, appended to `into`
+readFlags: function {path: StringView into: (List Flagged).borrow} is {
+    doc: (zd.read :path).orPanic
+    for each row: (doc.itemsAt path: "programs").orPanic loop {
+        args: List String
+        for each a: (row.itemsAt path: "args").orPanic loop args.append (a.textAt path: ""
+        ).orPanic.copy
+        into.append (Flagged name: (row.textAt path: "name").orPanic.copy :args)
+    }
+}
+
+# kindFlags -- the programs of each flags file `files` names under
+# tests/fixtures, read once for the kind
+kindFlags: function {r: Runner.view files: staticlist StringView} out List Flagged is {
+    l: List Flagged
+    for each f: files loop readFlags path: "\{r.root}/tests/fixtures/\{f}".stringView into: l
+    return l
+}
+
+# withFlags -- `argv` plus the flags `flags` gives the program `name`; none when
+# it lists no such program
+withFlags: function {
+    argv: (List String).take flags: (List Flagged).view name: StringView
+} out List String is {
+    for each f: flags loop {
+        if f.name.stringView == name then {
+            for each a: f.args loop argv.append from: a.copy
         }
     }
     return argv
@@ -3197,6 +3226,7 @@ runLeakCases: function {r: Runner} is {
 runErrorCases: function {r: Runner} is {
     # ---------------- ERROR (negative) cases ----------------
     errPool: List PoolJob
+    eflags: kindFlags :r files: errorFlagLists
     enmNames: fixtureNames dir: r.errors.stringView suffix: ".z"
     for each enmS: enmNames loop {
         enm: enmS.stringView
@@ -3211,10 +3241,9 @@ runErrorCases: function {r: Runner} is {
             sys: r.sys.stringView
             outc: os.nullDevice.stringView
         )
-        exf: "\{r.errors.stringView}/\{enm}.zcargs"
         steps.append (
             zjobs.mkStep
-            argv: (withExtraArgs argv: eza file: exf.stringView)
+            argv: (withFlags argv: eza flags: eflags name: enm)
             cwd: ""
             outPath: os.nullDevice.stringView
             errPath: epe.stringView
@@ -3386,8 +3415,12 @@ checkLoneErrorJob: function {r: Runner name: StringView} is {
     r.fails = r.fails + 1
 }
 
+# zdataFlagLists -- the ZDATA kind's flags file under tests/fixtures
+zdataFlagLists: list { "zdata_flags.zd" } out staticlist StringView
+
 # runZdataCases -- the ZDATA kind: each tests/fixtures/zdata/<case>.zd is read
-# with `zc data` (its own directory first, then what <case>.zcargs adds). A case
+# with `zc data` (its own directory first, then the flags zdata_flags.zd gives
+# it). A case
 # with a <case>.err golden must fail with those errors (normErr); any other
 # must succeed and print exactly its <case>.out, the file's values written back.
 # `zl lint --full` checks each file the same way: it must report the golden's
@@ -3396,6 +3429,7 @@ checkLoneErrorJob: function {r: Runner name: StringView} is {
 runZdataCases: function {r: Runner} is {
     dir: "\{r.root.stringView}/tests/fixtures/zdata"
     pool: List PoolJob
+    zflags: kindFlags :r files: zdataFlagLists
     names: fixtureNames dir: dir.stringView suffix: ".zd"
     for each nmS: names loop {
         nm: nmS.stringView
@@ -3405,13 +3439,12 @@ runZdataCases: function {r: Runner} is {
         argv.append from: "\{dir}/\{nm}.zd"
         argv.append from: "--system".string
         argv.append from: r.sys.copy
-        xf: "\{dir}/\{nm}.zcargs"
         outP: "\{r.tmp.stringView}/\{nm}.zdout"
         errP: "\{r.tmp.stringView}/\{nm}.zderr"
         steps: List PoolStep
         steps.append (
             zjobs.mkStep
-            argv: (withExtraArgs :argv file: xf.stringView)
+            argv: (withFlags :argv flags: zflags name: nm)
             cwd: ""
             outPath: outP.stringView
             errPath: errP.stringView
@@ -3433,7 +3466,7 @@ runZdataCases: function {r: Runner} is {
         lsteps: List PoolStep
         lsteps.append (
             zjobs.mkStep
-            argv: (withExtraArgs argv: largv file: xf.stringView)
+            argv: (withFlags argv: largv flags: zflags name: nm)
             cwd: ""
             outPath: os.nullDevice.stringView
             errPath: lerrP.stringView
@@ -3529,7 +3562,12 @@ rootFree: function {text: StringView root: StringView} out String is {
 }
 
 # dumpCaseJob -- DUMP case `c`'s job: `zc dump --canon` of it
-dumpCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
+dumpCaseJob: function {
+    r: Runner.view
+    c: CaseProgram.view
+    # the flags the kind's programs take (dump_flags.zd)
+    flags: (List Flagged).view
+} out PoolJob is {
     srcAbs: "\{r.root}/\{c.dir}"
     dpath: "\{r.tmp}/\{c.name}.canon"
     da: (
@@ -3542,13 +3580,12 @@ dumpCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
     # a dump case pins the whole-program model, which for a unit with no
     # `main` is the EAGER tier's -- the compiler resolves what a program
     # demands, and a program that demands nothing is entitled to an empty
-    # model. `<name>.zcargs` beside the source names the flag, the way an
-    # error fixture does.
-    dxf: "\{srcAbs}/\{c.name}.zcargs"
+    # model. dump_flags.zd names the flag, the way errors_flags.zd does an
+    # error fixture's.
     steps: List PoolStep
     steps.append (
         zjobs.mkStep
-        argv: (withExtraArgs argv: da file: dxf.stringView)
+        argv: (withFlags argv: da :flags name: c.name.stringView)
         cwd: ""
         outPath: dpath.stringView
         errPath: os.nullDevice.stringView
@@ -3559,12 +3596,16 @@ dumpCaseJob: function {r: Runner.view c: CaseProgram.view} out PoolJob is {
     return (zjobs.mkJob name: c.name.stringView :steps)
 }
 
+# dumpFlagLists -- the DUMP kind's flags file under tests/fixtures
+dumpFlagLists: list { "dump_flags.zd" } out staticlist StringView
+
 # runDumpCases -- the DUMP (canonical state) cases kind.
 runDumpCases: function {r: Runner} is {
     cases: List CaseProgram
     casePrograms path: "\{r.root}/tests/fixtures/dump_cases.zd".stringView into: cases
     dumpPool: List PoolJob
-    for each c: cases loop dumpPool.append (dumpCaseJob :r :c)
+    dflags: kindFlags :r files: dumpFlagLists
+    for each c: cases loop dumpPool.append (dumpCaseJob :r :c flags: dflags)
     dumpStatuses: ListVal i32
     dumpFailSteps: ListVal i64
     zjobs.runJobs jobs: dumpPool maxJobs: r.jobsMax statuses: dumpStatuses failSteps: dumpFailSteps

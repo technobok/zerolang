@@ -18,8 +18,9 @@
 # Usage: constparitygen [--root DIR] [--cells DIR]
 #   --root   the repository the fixtures are written under (default `.`):
 #            per kind emitc_corpus/cpar_<k>.z, run_golden/cpar_<k>.out,
-#            cpar_cases.zd (through caselist), and per refused reader
-#            errors/cpar_<k>_<reader>.z + .err + .zcargs.
+#            cpar_cases.zd (through caselist), per refused reader
+#            errors/cpar_<k>_<reader>.z + .err, and cpar_flags.zd giving
+#            each refused one `--eager` (through caselist).
 #   --cells  one program per cell into DIR plus DIR/manifest.txt (name kind
 #            reader position verdict detail) instead, to look at a cell alone.
 #
@@ -889,7 +890,8 @@ errGolden: function {
 
 # writeKind -- one kind's RUN program and golden, and a REFUSED program per
 # reader: a unit's errors are reported pass by pass, not in source order, so
-# one reader's cells -- one error per position -- keep the order fixed
+# one reader's cells -- one error per position -- keep the order fixed. Answers
+# the REFUSED programs' names.
 writeKind: function {
     root: StringView
     ks: (List Kind).view
@@ -898,7 +900,8 @@ writeKind: function {
     slots: (List Slot).view
     ki: u64
     cases: (List String).borrow
-} is {
+} out List String is {
+    refusedNames: List String
     k: ks.get i: ki
     run: pick :slots :ki expected: outcome.run
     if run.length > 0 then {
@@ -931,10 +934,11 @@ writeKind: function {
             writeFile path: "\{dir}/\{stem}.z" content: prog.stringView
             err: errGolden :k :rows slots: one
             writeFile path: "\{dir}/\{stem}.err" content: err.stringView
-            writeFile path: "\{dir}/\{stem}.zcargs" content: "--eager\n"
+            refusedNames.append stem.copy
         }
         ri = ri + 1
     }
+    return refusedNames
 }
 
 # writeFixtures -- every kind's programs and goldens under root, and
@@ -950,14 +954,24 @@ writeFixtures: function {
     ensureDir path: "\{root}/tests/fixtures/run_golden"
     ensureDir path: "\{root}/tests/fixtures/errors"
     cases: List String
+    refusedNames: List String
     ki: u64
     for ki < ks.length loop {
-        writeKind :root :ks :rs :rows :slots :ki :cases
+        rn: writeKind :root :ks :rs :rows :slots :ki :cases
+        for each n: rn loop refusedNames.append n.copy
         ki = ki + 1
     }
     path: "\{root}/tests/fixtures/cpar_cases.zd"
     caselist.write path: path.stringView header: casesHeader names: cases
+    # the refused programs are checked as the eager tier walks them
+    eager: List String
+    eager.append "--eager".string
+    fpath: "\{root}/tests/fixtures/cpar_flags.zd"
+    caselist.writeFlags path: fpath.stringView header: flagsHeader names: refusedNames args: eager
 }
+
+# flagsHeader -- the comment block cpar_flags.zd starts with
+flagsHeader: "# cpar_flags -- the flags of the REFUSED programs constparitygen writes from the\n# table tests/fixtures/constparity_expect.zd, read by the runner beside\n# errors_flags.zd. `make regen-constparity` writes the whole file: edit the\n# table, not this file."
 
 # casesHeader -- the comment block cpar_cases.zd starts with
 casesHeader: "# cpar_cases -- the RUN programs constparitygen writes from the table\n# tests/fixtures/constparity_expect.zd, read by the runner beside\n# run_cases.zd. `make regen-constparity` writes the whole file: edit the table,\n# not this file."
