@@ -1136,38 +1136,6 @@ demandTyperefNames: function {
     } else null
 }
 
-# typeArgSuffixName -- the suffix component a collection type-arg contributes to a
-# shell mono name. A bare atom gives its name; a cross-unit dotted ref gives its
-# MEMBER name (ztypes.zparamownership -> zparamownership) so the shell's mono name
-# matches the construction path's nameOf-based name. Without this the dotted
-# arg's atomName is "" and the shell mints `Map_u64_` (empty value), a distinct id
-# from the constructed `Map_u64_zparamownership`, and the field and its create
-# would disagree on the type.
-typeArgSuffixName: function {
-    st: zenv.ZSymbolTable.view
-    scope: ztypes.declid
-    ast: Ast.view
-    op: astnode.view
-} out String is {
-    match (
-        op
-    ) case dottedpath then {
-        if (
-            typeref.qualifierNamesUnit
-            :st
-            :scope
-            qualId: (atomNameId :ast n: (ast.nodes.getView i: op.parent))
-            memberId: (atomNameId :ast n: (ast.nodes.getView i: op.child))
-        ) then {
-            return (atomName :ast n: (ast.nodes.getView i: op.child))
-        } else {
-            return "".string
-        }
-    } else {
-        return (atomName :ast n: op)
-    }
-}
-
 # refuseSingletonTypeRef -- a type-ref that names a numeric generic parameter of
 # `owner` where only a field's or a local's type may (`n: cap`, `out cap`,
 # `n: cap.hold`, `(List t: cap)`): as a type the parameter has one value, the
@@ -1274,10 +1242,10 @@ anyNumericArgRefused: function {
     return false
 }
 
-# resolveTyperefCallShell -- a parameterized type ref: the mono it names
-# when resolution knows one, else a fresh record shell named by the head
-# and its argument suffixes, each argument's type names demanded on the way;
-# 0 when a numeric argument was refused.
+# resolveTyperefCallShell -- a parameterized type ref: the mono it names when
+# resolution knows one, each argument's type names demanded on the way; a
+# plain head's own type (plainHeadOrShell); else 0, the ref refused where it
+# is written (refuseApplication) -- a head that names nothing names no type.
 resolveTyperefCallShell: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -1302,7 +1270,6 @@ resolveTyperefCallShell: function {
         nid: zast.nodeid
     )
     if imid8.notZero then return imid8
-    suffix: atomName :ast n: (ast.nodes.getView i: callableId)
     walkScope: scopeFor typing: st.typing :scope :unitDecl
     (
         resolve.demandDefinition
@@ -1317,19 +1284,11 @@ resolveTyperefCallShell: function {
         arg: ast.nodes.getView i: argId
         if arg.namedoperation then opId = arg.operation
         if opId.notZero then {
-            an: typeArgSuffixName :st :scope :ast op: (ast.nodes.getView i: opId)
-            suffix.append "_"
-            suffix.append an
             demandTyperefNames :st :scope :ast :unitDecl typeExpr: (ast.nodes.getView i: opId)
         }
     }
-    # The shell is a NAME, not a definition: nothing ever gives it members or a
-    # layout, so if it survives to the emitter the C is invalid -- an incomplete
-    # type, or one no translation unit declares. That is fine for the shapes it
-    # exists for (a forward reference, a sized record's value key), and a lie
-    # for a GENERIC template whose arguments did not settle: `(Cell :t)` written
-    # where nothing owns a `t` reaches here, and would compile to a struct
-    # field of a type that is never defined. Say so instead.
+    # a GENERIC template whose arguments did not settle -- `(Cell :t)` written
+    # where nothing owns a `t` -- names no instance: say which argument, or why
     hn9: String
     hl9: u32
     hc9: u32
@@ -1384,39 +1343,80 @@ resolveTyperefCallShell: function {
         return ztypes.tid.zero
     }
     if headIsGeneric.not when hn9.length > 0 then {
-        return (
-            plainHeadOrShell
-            :st
-            :scope
-            :ast
-            :unitDecl
-            :callableId
-            suffix: suffix.stringView
-        )
+        return (plainHeadOrShell :st :scope :ast :unitDecl :callableId :nid)
     }
-    return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
+    # a generic head was reported above, a path or an application where it is
+    # written (typeref, refuseNonGenericApplication); a literal is reported here
+    if headIsGeneric.not then reportValueHead :st :ast :callableId
+    refuseApplication :st :nid
+    return ztypes.tid.zero
 }
 
-# plainHeadOrShell -- the type a call-shaped reference names when its head is
-# no generic template. A head that resolves takes no arguments at all,
+# reportValueHead -- the head of a type application is a literal, a text or a
+# list (`("s" i64)`), which no definition could give a type to. A path or an
+# application, the other heads that are no name, is reported where it is
+# written.
+reportValueHead: function {st: zenv.ZSymbolTable ast: Ast callableId: zast.nodeid} is {
+    cn: ast.nodes.getView i: callableId
+    if cn.call or cn.dottedpath then return
+    what: "a value"
+    if cn.atomstring then what = "a text"
+    if cn.listblock then what = "a list"
+    (
+        addError
+        :st
+        nodeid: callableId
+        lineno: (nodeLine n: cn)
+        colno: (nodeCol n: cn)
+        e: zast.err.typeError
+        msg: "the head of this type application is \{what}, not a type: it takes no arguments"
+    )
+}
+
+# refuseApplication -- the type application `nid` names no type: it answers
+# 0 and is refused where it is written (ZTyping.refusedValues), as a refused
+# numeric argument is, so the member it declares is read as refused
+# (memberTyperefRefused) and nothing is compared with it. Its cause is
+# reported where the cause is written.
+refuseApplication: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
+    st.typing.refusedValues.add item: nid
+}
+
+# plainHeadOrShell -- the type a call-shaped reference (`nid`) names when its
+# head is no generic template. A head that resolves takes no arguments at all,
 # whatever is written for one (`i64 "s"`): it is refused, and the head
 # answers, as where the arguments settle (completeApplication). A head that
-# does not resolve yet is the shell named `suffix`; a head that is a generic
-# parameter was refused before (refuseAppliedGenericParam).
+# names nothing is reported once, at the head, and the reference answers 0
+# (refuseApplication); a head that is a generic parameter was refused before
+# (refuseAppliedGenericParam).
 plainHeadOrShell: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
     callableId: zast.nodeid
-    suffix: StringView
+    nid: zast.nodeid
 } out ztypes.tid is {
     plain: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: callableId
     if plain.isZero then {
-        cn: ast.nodes.getView i: callableId
-        hn: atomNameId :ast n: cn
-        # a number is no name a later definition could give a type to
-        if hn.notZero when (isNumericLiteralNameAt :ast ref: hn) then (
+        reportUnknownHead :st :ast :callableId
+        refuseApplication :st :nid
+        return ztypes.tid.zero
+    }
+    refuseNonGenericApplication :st :ast tplId: plain at: callableId
+    return plain
+}
+
+# reportUnknownHead -- the head of a type application, a name that names no
+# type: a number, which no later definition could give a type to, or an unknown
+# name, reported as a bare type-ref's is. The head is refused with it, so the
+# pass over pending type-refs (stampOnePendingTyperef) names it no second time.
+reportUnknownHead: function {st: zenv.ZSymbolTable ast: Ast callableId: zast.nodeid} is {
+    cn: ast.nodes.getView i: callableId
+    hn: atomNameId :ast n: cn
+    st.typing.refusedValues.add item: callableId
+    if hn.notZero when (isNumericLiteralNameAt :ast ref: hn) then {
+        (
             addError
             :st
             nodeid: callableId
@@ -1425,10 +1425,19 @@ plainHeadOrShell: function {
             e: zast.err.typeError
             msg: "'\{zast.nameTextAt :ast ref: hn}' is a number, not a type: it takes no arguments"
         )
-        return (st.reg.newType name: suffix typetype: ztypes.ztypetype.recordType)
+        return
     }
-    refuseNonGenericApplication :st :ast tplId: plain at: callableId
-    return plain
+    ht: zast.nameTextAt :ast ref: hn
+    (
+        declare.addResolveErrorAt
+        :st
+        nodeid: (zast.nodeIdOf n: cn)
+        lineno: (nodeLine n: cn)
+        colno: (nodeCol n: cn)
+        e: zast.err.badReference
+        msg: "Unknown type '\{ht}'"
+        width: ht.length
+    )
 }
 
 # headGenericParam -- the generic parameter a type application's head `hn`
