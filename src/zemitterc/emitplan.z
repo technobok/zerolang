@@ -1141,13 +1141,10 @@ planRecordMethods: function {prog: Program.view ctx: Ctx} is {
         if u.namedoperation.not then continue
         opId: u.operation
         if opId.isZero or (isGenericTemplateUnitOp :prog :opId) then continue
-        un: zast.nameTextCopy ast: prog.ast ref: u.name
-        sm: ctx.known.mainName.copy
         smD: ctx.known.mainUnitId
         (
             ctxBindMain
             known: ctx.known
-            name: un.stringView
             unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: u.name)
         )
         (
@@ -1157,7 +1154,7 @@ planRecordMethods: function {prog: Program.view ctx: Ctx} is {
             bodyIds: (zast.unitBodyIdsAt ast: prog.ast unitId: opId)
             ownerTid: ztypes.tid
         )
-        ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
+        ctxBindMain known: ctx.known unitDecl: smD
     }
 }
 
@@ -1438,24 +1435,19 @@ planFnsPass: function {
 } is {
     for each uId: prog.ast.units loop {
         opId: zast.nodeid
-        unitNameText: String
         unitNameId: zast.nameid
         {
             u: prog.ast.nodes.getView i: uId
             if u.namedoperation then {
-                un: zast.poolTextAt pool: prog.ast.names ref: u.name
                 opId = u.operation
-                unitNameText = un.copy
                 unitNameId = u.name
             }
         }
         if opId.notZero then {
-            sm: ctx.known.mainName.copy
             smD: ctx.known.mainUnitId
             (
                 ctxBindMain
                 known: ctx.known
-                name: unitNameText.stringView
                 unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: unitNameId)
             )
             if (isGenericTemplateUnitOp :prog :opId) then {
@@ -1469,7 +1461,7 @@ planFnsPass: function {
             } else {
                 planFnsIn :prog :ctx mainOpId: opId ownerTid: ztypes.tid
             }
-            ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
+            ctxBindMain known: ctx.known unitDecl: smD
         }
     }
 }
@@ -1574,7 +1566,6 @@ drainFnJobs: function {
     protos: String.borrow
     bodies: String.borrow
 } is {
-    sm: ctx.known.mainName.copy
     smD: ctx.known.mainUnitId
     sns: ctx.known.nsTid
     more: true
@@ -1590,7 +1581,7 @@ drainFnJobs: function {
             k = k + 1
         }
     }
-    ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
+    ctxBindMain known: ctx.known unitDecl: smD
     ctx.known.nsTid = sns
 }
 
@@ -1608,10 +1599,7 @@ writeFnJob: function {
     j: ctx.plan.fnJobs.get i: k
     j.written = true
     ctx.plan.fnJobs.set i: k val: j
-    if j.unitDecl != ctx.known.mainUnitId then {
-        un: zast.poolTextAt pool: prog.ast.names ref: (prog.typing.declNameOf declId: j.unitDecl)
-        ctxBindMain known: ctx.known name: un.stringView unitDecl: j.unitDecl
-    }
+    if j.unitDecl != ctx.known.mainUnitId then ctxBindMain known: ctx.known unitDecl: j.unitDecl
     ctx.known.nsTid = j.nsTid
     pa: protos.length
     ba: bodies.length
@@ -2016,7 +2004,7 @@ collectFnDecls: function {
                 ) or
                 (
                     (bm.name == zast.wellKnown.slot.wkMain) and
-                    (known.mainName.stringView != known.realMain)
+                    (known.mainUnitId != prog.typing.mainUnitRoot)
                 )
             )
             if skipDepMain.not then {
@@ -2513,21 +2501,17 @@ emitC: function {
     if rtids.text.notZero then typeCnames.set i: rtids.text.u64 val: svC.copy
     origins: ListVal ztypes.tid
     buildOriginTids :prog acc: origins
-    mn: mainCName :prog
     litIds: ListVal zast.nodeid
     litTexts: List String
     collectUnitLiterals :prog ids: litIds texts: litTexts
     litIndex: literalIndex ids: litIds
     litSizes: ListVal u64
     for each lt: litTexts loop litSizes.append lt.length
-    rm: mn.copy
     ctx: (
         Ctx
         known: (
             KnownNames
-            mainName: mn
             nsTid: ztypes.tid
-            realMain: rm
             :strC
             :svC
             curThisTid: ztypes.tid
@@ -2758,8 +2742,7 @@ emitC: function {
         bindFragTypeTids :prog :ctx
         bindFragUnitDecls :prog pieces: ctx.pieces
         bindClassRows :prog pieces: ctx.pieces
-        rmn: ctx.known.realMain.copy
-        ctxBindMain known: ctx.known name: rmn.stringView unitDecl: typing.mainUnitRoot
+        ctxBindMain known: ctx.known unitDecl: typing.mainUnitRoot
     }
     nativepieces.checkLoadedNatives :prog :ctx
     noteStaticVids :prog :ctx
@@ -3040,14 +3023,10 @@ pathDeclOf: function {prog: Program.view path: StringView} out ztypes.declid is 
 
 # true when the program defines a `main`.
 programHasMain: function {prog: Program.view} out bool is {
-    mainName: prog.ast.mainUnitName.stringView
     for each uId: prog.ast.units loop {
         opId: zast.nodeid
         u: prog.ast.nodes.getView i: uId
-        if u.namedoperation then {
-            un: zast.poolTextAt pool: prog.ast.names ref: u.name
-            if un.stringView == mainName then opId = u.operation
-        }
+        if u.namedoperation when u.name == prog.reg.regMainUnitId then opId = u.operation
         if opId.notZero when (unitHasMain :prog mainOpId: opId) then return true
     }
     return false
@@ -3079,15 +3058,11 @@ buildDefUnitIndex: function {prog: Program.view known: KnownNames} is {
     }
 }
 
-# ctxBindMain -- rebind the emission main unit: mainName plus its unit
-# DECLARATION, which the CALLER supplies. Every caller already holds the unit
-# by id -- off the type it is emitting, off the unit node it is walking, or
-# saved from the bind it is restoring -- so nothing here asks which unit is
-# spelled a given way. Every mainName assignment must route through here so
-# mainUnitId never goes stale (definedInNonMain compares against it).
-ctxBindMain: function {known: KnownNames name: StringView unitDecl: ztypes.declid} is {
-    nm: name.string
-    known.mainName = nm.take
+# ctxBindMain -- rebind the emission main unit: its DECLARATION, which the
+# CALLER supplies. Every caller already holds the unit by id -- off the type it
+# is emitting, off the unit node it is walking, or saved from the bind it is
+# restoring -- so nothing here asks which unit is spelled a given way.
+ctxBindMain: function {known: KnownNames unitDecl: ztypes.declid} is {
     known.mainUnitId = unitDecl
 }
 
@@ -3628,28 +3603,23 @@ emitRecordDefs: function {
 } is {
     for each uId: prog.ast.units loop {
         opId: zast.nodeid
-        unitNameText: String
         unitNameId: zast.nameid
         {
             u: prog.ast.nodes.getView i: uId
             if u.namedoperation then {
-                un: zast.poolTextAt pool: prog.ast.names ref: u.name
                 opId = u.operation
-                unitNameText = un.copy
                 unitNameId = u.name
             }
         }
         if opId.notZero then {
-            sm: ctx.known.mainName.copy
             smD: ctx.known.mainUnitId
             (
                 ctxBindMain
                 known: ctx.known
-                name: unitNameText.stringView
                 unitDecl: (ztypecheck.unitDeclOfName typing: prog.typing nameId: unitNameId)
             )
             emitRecordDefsIn :prog :ctx mainOpId: opId :buf
-            ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
+            ctxBindMain known: ctx.known unitDecl: smD
         }
     }
     emitInstanceImplementationImpls :prog :ctx :buf
@@ -4112,11 +4082,4 @@ emitOneMethod: function {
         buf.append "\n"
     }
     resetFnEmitState :ctx
-}
-
-# the C name of the program's `main`.
-mainCName: function {prog: Program.view} out String is {
-    mv: prog.ast.mainUnitName.stringView
-    mc: mv.string
-    return mc
 }

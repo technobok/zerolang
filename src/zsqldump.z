@@ -808,7 +808,7 @@ ZDumper: class {
                 this.appendUnitRow
                 ast: program
                 unitNamedOpId: uId
-                mainName: program.mainUnitName.stringView
+                mainNameId: (typing.declNameOf declId: typing.mainUnitRoot)
                 :typing
             )
         }
@@ -819,14 +819,15 @@ ZDumper: class {
         :this
         ast: Ast.view
         unitNamedOpId: zast.nodeid
-        mainName: StringView
+        # the main unit's name
+        mainNameId: zast.nameid
         typing: ztyping.ZTyping.view
     } is {
         unitNamedOp: ast.nodes.getView i: unitNamedOpId
         if unitNamedOp.namedoperation then {
             uname: zast.nameTextAt :ast ref: unitNamedOp.name
             uid: unitdefNodeId :ast nId: unitNamedOp.operation
-            isMain: uname.stringView == mainName
+            isMain: unitNamedOp.name == mainNameId
             unameSql: sqlStr s: uname.stringView
             isMainStr: boolNum b: isMain
             utidStr: optTidStr o: (typing.unitTypesById.get key: uid)
@@ -1283,16 +1284,16 @@ ZDumper: class {
 
     # emit the units in CANONICAL order, so two dumps of the same program
     # compare equal whatever order the walk found them in
-    appendUnitsCanon: function {:this program: Ast.view} is {
+    appendUnitsCanon: function {:this program: Ast.view typing: ztyping.ZTyping.view} is {
         rows: List String
-        mn: program.mainUnitName.stringView
+        mn: typing.declNameOf declId: typing.mainUnitRoot
         for each uId: program.units loop {
             u: program.nodes.getView i: uId
             match (
                 u
             ) case namedoperation then {
                 uname: zast.poolTextAt pool: program.names ref: u.name
-                isMain: uname.stringView == mn
+                isMain: u.name == mn
                 unameSql: sqlStr s: uname.stringView
                 isMainStr: boolNum b: isMain
                 line: "\{unameSql} | \{isMainStr}"
@@ -1866,7 +1867,7 @@ typeRowName: function {
 dumpCanon: function {program: Ast.view symtab: zenv.ZSymbolTable} out String is {
     mu: symtab.typing.mainUnitRoot
     d: ZDumper acc: "".string
-    d.appendUnitsCanon :program
+    d.appendUnitsCanon :program typing: symtab.typing
     d.appendTypesCanon ud: mu st: symtab names: program.names
     d.appendDeclChildCanon ast: program ud: mu st: symtab
     d.appendArgDispositionCanon ast: program st: symtab

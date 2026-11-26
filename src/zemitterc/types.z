@@ -2194,19 +2194,13 @@ maybePreEmitElem: function {
     if origin.notZero when (userSpecInstance :prog tid: cid).not then return
     if (prog.reg.isGenericOf tid: cid) then return
     duoPe: definedInUnitName :prog tid: cid
-    peUnit: ctx.known.mainName.copy
-    if duoPe.length > 0 then {
-        if (prog.reg.isNativeOf tid: cid) then return
-        peUnit = duoPe.string
-    }
+    if duoPe.length > 0 when (prog.reg.isNativeOf tid: cid) then return
     if (prog.reg.typeValid tid: cid).not then return
     tt: prog.reg.typetypeOf typeId: cid
-    smPe: ctx.known.mainName.copy
     smPeD: ctx.known.mainUnitId
     (
         emitplan.ctxBindMain
         known: ctx.known
-        name: peUnit.stringView
         unitDecl: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing tid: cid)
     )
     if tt == ztypes.ztypetype.variantType then {
@@ -2227,7 +2221,7 @@ maybePreEmitElem: function {
     if tt == ztypes.ztypetype.unionType then {
         emitUnionMono :prog :ctx tid: cid :buf
     }
-    emitplan.ctxBindMain known: ctx.known name: smPe.stringView unitDecl: smPeD
+    emitplan.ctxBindMain known: ctx.known unitDecl: smPeD
 }
 
 # preEmitSlotType -- a type a protocol's or a facet's vtable slot names, as its
@@ -2769,12 +2763,10 @@ emitUserTypeById: function {
 } is {
     if (prog.reg.typeValid :tid).not then return
     duo: definedInUnitName :prog :tid
-    sm: ctx.known.mainName.copy
     smD: ctx.known.mainUnitId
     if duo.length > 0 then (
         emitplan.ctxBindMain
         known: ctx.known
-        name: duo
         unitDecl: (ztypecheck.unitDeclOfTid reg: prog.reg typing: prog.typing :tid)
     )
     tt: prog.reg.typetypeOf typeId: tid
@@ -2788,7 +2780,7 @@ emitUserTypeById: function {
     if tt == ztypes.ztypetype.facetType then {
         emitOneFacet :prog :ctx :tid :buf
     }
-    emitplan.ctxBindMain known: ctx.known name: sm.stringView unitDecl: smD
+    emitplan.ctxBindMain known: ctx.known unitDecl: smD
 }
 
 # collectLateMonosKind -- append late monos of one origin to acc. Called in
@@ -4653,10 +4645,8 @@ isValueViewTid: function {prog: Program.view ctx: Ctx.view tid: ztypes.tid} out 
 # nativeNoArgOf -- the unit that DECLARES `base.memb` when the member is a
 # native taking no parameters, so a no-paren read auto-calls it (os.pid,
 # io.stdout). "" otherwise. The gates run cheapest first: nearly every dotted
-# path has a non-unit base and stops at the registry lookup, and the shadow
-# check -- a declaration of the base name in `unitName` displaces the unit,
-# since name ids are pooled program-wide -- runs only once a native is in
-# hand.
+# path has a non-unit base and stops at the registry lookup, and the native
+# checks run only once a callee is in hand.
 nativeNoArgOf: function {
     prog: Program.view
     # the path's base node
@@ -4687,22 +4677,11 @@ nativeNoArgOf: function {
 # noArgNativeRhs -- a binding RHS that is a bare zero-parameter native
 # auto-call (os.args / os.envNames return an owned List, so the binding's List
 # branch must emit the call, not a fresh empty list).
-noArgNativeRhs: function {
-    prog: Program.view
-    ctx: Ctx.view
-    unitName: StringView
-    n: astnode.view
-} out bool is {
+noArgNativeRhs: function {prog: Program.view n: astnode.view} out bool is {
     match (
         n
     ) case statementline then {
-        return (
-            noArgNativeRhs
-            :ctx
-            :prog
-            :unitName
-            n: (prog.ast.nodes.getView i: n.statementline)
-        )
+        return (noArgNativeRhs :prog n: (prog.ast.nodes.getView i: n.statementline))
     } case dottedpath then {
         nu: (
             nativeNoArgOf
