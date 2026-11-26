@@ -2000,7 +2000,7 @@ refuseValtypeCopy: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     asItems: zast.kidspan
-    defName: StringView
+    defNameId: zast.nameid
 } is {
     for each amId: (zast.kidsOf :ast span: asItems) loop {
         am: ast.nodes.getView i: amId
@@ -2012,7 +2012,11 @@ refuseValtypeCopy: function {
                 lineno: am.lineno
                 colno: am.colno
                 e: zast.err.typeError
-                msg: "'\{defName}' is a value type: its `.copy` is the compiler's byte copy, which cannot be written or struck off"
+                msg: "'\{(
+                    zast.nameTextAt
+                    :ast
+                    ref: defNameId
+                )}' is a value type: its `.copy` is the compiler's byte copy, which cannot be written or struck off"
                 note: "a value type holds no reftype, so copying its bytes copies the whole value".string
                 hint: "a value that must never be duplicated is a class".string
                 width: 4
@@ -2290,7 +2294,7 @@ attachMethods: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     parentId: ztypes.tid
     objId: zast.nodeid
 } out bool is {
@@ -2319,7 +2323,7 @@ attachMethods: function {
                     )
                 }
             }
-            ownerNmId: nameIdOf :ast name: defName
+            ownerNmId: defNameId
             # a function a field of the type is declared by was resolved when
             # the field attached (fieldHeadMemberTid), and keeps that signature
             mido: st.typing.declChildOfId parentTypeId: parentId nameId: am.name
@@ -3102,7 +3106,7 @@ fieldHeadMemberTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     ownerTid: ztypes.tid
     nameId: zast.nameid
 } out optionval ztypes.tid is {
@@ -3123,7 +3127,7 @@ fieldHeadMemberTid: function {
         :st
         :ast
         :unitDecl
-        defId: (zast.poolFind pool: ast.names text: defName)
+        defId: defNameId
         memberId: nameId
     )
 }
@@ -3176,7 +3180,7 @@ attachRecordField: function {
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     rid: ztypes.tid
     fm: argref
     fname: StringView
@@ -3187,7 +3191,7 @@ attachRecordField: function {
     ftnR: fieldHeadNameId :ast n: (ast.nodes.getView i: fm.operation)
     # a field's type-ref can name a SIBLING function (an fn-ptr
     # slot defaulting to it), which is a member like any other
-    mrefR: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: rid nameId: ftnR
+    mrefR: fieldHeadMemberTid :st :ast :unitDecl :defNameId ownerTid: rid nameId: ftnR
     handledR: false
     if mrefR.some then {
         st.typing.setMemberType parentTypeId: rid nameId: fm.name childTypeId: mrefR
@@ -3208,7 +3212,7 @@ attachRecordField: function {
         :scope
         :ast
         :unitDecl
-        :defName
+        :defNameId
         :rid
         :fm
         :fname
@@ -3366,14 +3370,14 @@ attachRecordIsItems: function {
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     rnode: objref
     rid: ztypes.tid
     isgen: bool
 } out recordisdecls is {
     got: recordisdecls create: false eq: false ne: false
     rt: rid
-    ownerNmId: nameIdOf :ast name: defName
+    ownerNmId: defNameId
     kFiter: u64
     for kFiter < rnode.nis loop {
         fmId: zast.objIsItemAt :ast nid: rnode.nid i: kFiter
@@ -3400,7 +3404,7 @@ attachRecordIsItems: function {
                     :scope
                     :ast
                     :unitDecl
-                    :defName
+                    :defNameId
                     :rid
                     :fm
                     fname: fname.stringView
@@ -3434,17 +3438,17 @@ resolveRecord: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     rnode: objref
 } is {
     rid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        nameId: defNameId
         typetype: ztypes.ztypetype.recordType
     )
     rt: rid
@@ -3458,10 +3462,17 @@ resolveRecord: function {
     st.reg.setValtype typeId: rt value: true
     asItems: objAsItemsOf :ast nid: rnode.nid
     isgen: zast.itemsHaveGenericParam :ast items: asItems
-    unitTmpl: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    unitTmpl: nestedTemplateUnit :st :ast :scope :unitDecl nameId: defNameId
     if rnode.kind == zast.objectkind.dataDef then {
         st.reg.setStatic typeId: rt value: true
-        refuseStaticShape :st :defName :rnode ownParams: isgen inGenericUnit: unitTmpl.notZero
+        (
+            refuseStaticShape
+            :st
+            defName: (zast.nameTextAt :ast ref: defNameId).stringView
+            :rnode
+            ownParams: isgen
+            inGenericUnit: unitTmpl.notZero
+        )
     }
     if unitTmpl.notZero then isgen = true
     ridDecl: st.typing.declIdOfType typeId: rid
@@ -3483,14 +3494,14 @@ resolveRecord: function {
         :asItems
         nameId: zast.wellKnown.slot.wkOpNe
     ).declared
-    refuseValtypeCopy :st :ast :asItems :defName
+    refuseValtypeCopy :st :ast :asItems :defNameId
     crB: asBindingOf :st :ast ownerDecl: ridDecl :asItems nameId: zast.wellKnown.slot.wkCreate
     if crB.struck then {
         st.walk.createOptOut.add item: rid
     }
     if isgen then {
         st.reg.setGeneric typeId: rt value: true
-        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
         registerGenericParams :st :ast tdecl: typeDecl items: asItems
         if unitTmpl.notZero then registerUnitParamsOn :st :ast tdecl: typeDecl :unitTmpl
         refuseReftypeBounds :st :ast tdecl: typeDecl what: "record" items: asItems
@@ -3504,12 +3515,12 @@ resolveRecord: function {
         :scope
         :ast
         :unitDecl
-        :defName
+        :defNameId
         :rnode
         :rid
         :isgen
     )
-    hasCreateAs: attachMethods :st :scope :ast :unitDecl :defName parentId: rt objId: rnode.nid
+    hasCreateAs: attachMethods :st :scope :ast :unitDecl :defNameId parentId: rt objId: rnode.nid
     attachMarkers :st :scope :ast :unitDecl parentId: rid objId: rnode.nid
     if isDecls.create.not when hasCreateAs.not then {
         createId: (
@@ -3578,7 +3589,7 @@ attachSumMethods: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     vnode: objref
     sumTid: ztypes.tid
     isgen: bool
@@ -3589,7 +3600,7 @@ attachSumMethods: function {
         kAiter = kAiter + 1
         am: argRefAt :ast nid: amId
         if am.nid.notZero then {
-            ownerNmId: nameIdOf :ast name: defName
+            ownerNmId: defNameId
             mido: (
                 resolveMethodFnLazy
                 :st
@@ -3617,7 +3628,7 @@ attachSumMethods: function {
                     :scope
                     :ast
                     :unitDecl
-                    :defName
+                    :defNameId
                     ownerId: sumTid
                     :am
                 )
@@ -3660,18 +3671,14 @@ attachVariantTag: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     vnode: objref
     variantTid: ztypes.tid
     armCountV: u64
     allNullV: bool
 } is {
-    tagId: (
-        mintSumTag
-        :st
-        :defName
-        source: (unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid)
-    )
+    tagSrc: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
+    tagId: mintSumTag :st defName: (zast.nameTextAt :ast ref: defNameId).stringView source: tagSrc
     # NOT the atomic pair: a tag member is declared by the
     # sweep that discovers it and RE-TYPED here once the
     # tag's own type is known
@@ -3729,17 +3736,17 @@ resolveVariant: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     vnode: objref
 } is {
     variantTid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        nameId: defNameId
         typetype: ztypes.ztypetype.variantType
     )
     vvid: variantTid
@@ -3761,11 +3768,11 @@ resolveVariant: function {
     if onIsgen.objectdef then {
         isgen = zast.itemsHaveGenericParam :ast items: onIsgen.asItems
     }
-    unitTmplV: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    unitTmplV: nestedTemplateUnit :st :ast :scope :unitDecl nameId: defNameId
     if isChoice then (
         refuseStaticShape
         :st
-        :defName
+        defName: (zast.nameTextAt :ast ref: defNameId).stringView
         rnode: vnode
         ownParams: isgen
         inGenericUnit: unitTmplV.notZero
@@ -3797,10 +3804,10 @@ resolveVariant: function {
     vAsItems: zast.kidspan first: 0 count: 0
     vOn: ast.nodes.get i: vnode.nid
     if vOn.objectdef then vAsItems = vOn.asItems
-    refuseValtypeCopy :st :ast asItems: vAsItems :defName
+    refuseValtypeCopy :st :ast asItems: vAsItems :defNameId
     if isgen then {
         st.reg.setGeneric typeId: variantTid value: true
-        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
         {
             onRg: ast.nodes.get i: vnode.nid
             if onRg.objectdef then {
@@ -3871,9 +3878,9 @@ resolveVariant: function {
                 :scope
                 ownerTid: variantTid
                 oId: fm.operation
-                thisName: (nameIdOf :ast name: defName)
+                thisName: defNameId
             )
-            if (memberaccess.refuseArmPayload :st :ast :fm :defName :cid :isChoice) then continue
+            if (memberaccess.refuseArmPayload :st :ast :fm :defNameId :cid :isChoice) then continue
             st.typing.setMemberType parentTypeId: variantTid nameId: fm.name childTypeId: cid
             (
                 typeref.recordTyperef
@@ -3905,14 +3912,14 @@ resolveVariant: function {
             :ast
             :unitDecl
             :scope
-            :defName
+            :defNameId
             :vnode
             :variantTid
             :armCountV
             :allNullV
         )
     }
-    attachSumMethods :st :ast :unitDecl :scope :defName :vnode sumTid: variantTid :isgen
+    attachSumMethods :st :ast :unitDecl :scope :defNameId :vnode sumTid: variantTid :isgen
     attachMarkers :st :scope :ast :unitDecl parentId: variantTid objId: vnode.nid
     if isgen.not then (
         synthValueMembers
@@ -4036,7 +4043,7 @@ attachUnionArm: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     uid: ztypes.tid
-    defName: StringView
+    defNameId: zast.nameid
     fm: argref
 } is {
     aname: zast.nameTextCopy :ast ref: fm.name
@@ -4091,7 +4098,7 @@ attachUnionArm: function {
         :scope
         ownerTid: uid
         oId: armTe
-        thisName: (nameIdOf :ast name: defName)
+        thisName: defNameId
     )
     # a payload refused where it is written has no type to judge; a generic
     # parameter has no family until an instance binds it (`anyval.generic` is a
@@ -4153,17 +4160,17 @@ resolveUnion: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     vnode: objref
 } is {
     uid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        nameId: defNameId
         typetype: ztypes.ztypetype.unionType
     )
     uuid: uid
@@ -4177,11 +4184,11 @@ resolveUnion: function {
     if onIsgen.objectdef then {
         isgen = zast.itemsHaveGenericParam :ast items: onIsgen.asItems
     }
-    unitTmplU: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    unitTmplU: nestedTemplateUnit :st :ast :scope :unitDecl nameId: defNameId
     if unitTmplU.notZero then isgen = true
     if isgen then {
         st.reg.setGeneric typeId: uid value: true
-        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
         {
             onRg: ast.nodes.getView i: vnode.nid
             if onRg.objectdef then {
@@ -4215,7 +4222,7 @@ resolveUnion: function {
             if armBadU then continue
             if (refuseSelfNamedMember :st :ast ownerTid: (st.typing.declTypeOf declId: uDecl) :fm
             ) then continue
-            attachUnionArm :st :ast :unitDecl :scope :uid :defName :fm
+            attachUnionArm :st :ast :unitDecl :scope :uid :defNameId :fm
         }
     }
     # both arm names of a 2-arm sum -- the union half of the same record the
@@ -4228,11 +4235,12 @@ resolveUnion: function {
     # generic template's is its instances'
     recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: uid arms: armCountU
     if isgen.not then {
+        tagSrc: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
         tagId: (
             mintSumTag
             :st
-            :defName
-            source: (unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid)
+            defName: (zast.nameTextAt :ast ref: defNameId).stringView
+            source: tagSrc
         )
         # NOT the atomic pair: a tag member is declared by the
         # sweep that discovers it and RE-TYPED here once the
@@ -4250,7 +4258,7 @@ resolveUnion: function {
             childTypeId: tagId
         )
     }
-    attachSumMethods :st :ast :unitDecl :scope :defName :vnode sumTid: uid :isgen
+    attachSumMethods :st :ast :unitDecl :scope :defNameId :vnode sumTid: uid :isgen
     attachMarkers :st :scope :ast :unitDecl parentId: uid objId: vnode.nid
     if allNull.not then {
         st.reg.setNeedsDestructor typeId: uid
@@ -4266,7 +4274,7 @@ resolveClassMethodDecl: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     isgen: bool
     fm: argref
@@ -4291,7 +4299,7 @@ resolveClassMethodDecl: function {
             }
         }
         if produces then {
-            ownerNmId: nameIdOf :ast name: defName
+            ownerNmId: defNameId
             mido: (
                 resolveMethodFnLazy
                 :st
@@ -4518,7 +4526,7 @@ resolveClassFieldEntry: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     fm: argref
 } out bool is {
@@ -4552,7 +4560,7 @@ resolveClassFieldEntry: function {
         )
         if fOwned.not then borrowedField = true
     }
-    mref: fieldHeadMemberTid :st :ast :unitDecl :defName ownerTid: cid nameId: ftn
+    mref: fieldHeadMemberTid :st :ast :unitDecl :defNameId ownerTid: cid nameId: ftn
     match (
         mref
     ) case some then {
@@ -4564,7 +4572,7 @@ resolveClassFieldEntry: function {
             :ast
             :unitDecl
             :scope
-            :defName
+            :defNameId
             :cid
             fname: fname.stringView
             :borrowedField
@@ -4619,7 +4627,7 @@ resolveClassField: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     isgen: bool
     fmId: zast.nodeid
@@ -4628,7 +4636,7 @@ resolveClassField: function {
     fm: argRefAt :ast nid: fmId
     if fm.nid.notZero then {
         if (isFunctionDefOp op: (ast.nodes.getView i: fm.operation)) then {
-            resolveClassMethodDecl :st :ast :unitDecl :scope :defName :cid :isgen :fm
+            resolveClassMethodDecl :st :ast :unitDecl :scope :defNameId :cid :isgen :fm
         } else {
             if (
                 resolveClassFieldEntry
@@ -4636,7 +4644,7 @@ resolveClassField: function {
                 :ast
                 :unitDecl
                 :scope
-                :defName
+                :defNameId
                 :cid
                 :fm
             ) then needsDtor = true
@@ -4672,7 +4680,7 @@ resolveClassAsMethods: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     isgen: bool
     cnode: objref
@@ -4697,7 +4705,7 @@ resolveClassAsMethods: function {
                 }
             }
             if produces then {
-                ownerNmId: nameIdOf :ast name: defName
+                ownerNmId: defNameId
                 methodTid: (
                     resolveMethodFn
                     :st
@@ -4730,7 +4738,7 @@ resolveClassCreate: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     isgen: bool
     cnode: objref
@@ -4738,7 +4746,7 @@ resolveClassCreate: function {
     needsDtor: false
     hasCreate: false
     if isgen.not then {
-        hcAs: attachMethods :st :scope :ast :unitDecl :defName parentId: cid objId: cnode.nid
+        hcAs: attachMethods :st :scope :ast :unitDecl :defNameId parentId: cid objId: cnode.nid
         if hcAs then hasCreate = true
     }
     # a generic template's marker holds for every instance, each checked at the
@@ -4826,7 +4834,7 @@ finishClassDef: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     cid: ztypes.tid
     ccid: ztypes.tid
     isgen: bool
@@ -4836,7 +4844,7 @@ finishClassDef: function {
     pvGrants: (ListVal zast.nameid).view
 } is {
     needsDtor: needsDtorIn
-    resolveClassAsMethods :st :ast :unitDecl :scope :defName :cid :isgen :cnode
+    resolveClassAsMethods :st :ast :unitDecl :scope :defNameId :cid :isgen :cnode
     cobj: ast.nodes.get i: cnode.nid
     if cobj.objectdef when (
         asBindingOf
@@ -4854,7 +4862,7 @@ finishClassDef: function {
         :ast
         :unitDecl
         :scope
-        :defName
+        :defNameId
         :cid
         :isgen
         :cnode
@@ -4879,19 +4887,18 @@ resolveClass: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
     # the class's name, interned
     nameId: zast.nameid
     cnode: objref
 } is {
     cid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        :nameId
         typetype: ztypes.ztypetype.classType
     )
     ccid: cid
@@ -4911,11 +4918,11 @@ resolveClass: function {
     if onIsgen.objectdef then {
         isgen = zast.itemsHaveGenericParam :ast items: onIsgen.asItems
     }
-    unitTmplC: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    unitTmplC: nestedTemplateUnit :st :ast :scope :unitDecl :nameId
     if unitTmplC.notZero then isgen = true
     if isgen then {
         st.reg.setGeneric typeId: cid value: true
-        typeDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+        typeDecl: declOfUnitDef :st :scope :unitDecl :nameId
         {
             onRg: ast.nodes.getView i: cnode.nid
             if onRg.objectdef then {
@@ -4951,7 +4958,7 @@ resolveClass: function {
     for kFiter < cnode.nis loop {
         fmId: zast.objIsItemAt :ast nid: cnode.nid i: kFiter
         kFiter = kFiter + 1
-        if (resolveClassField :st :ast :unitDecl :scope :defName :cid :isgen :fmId) then {
+        if (resolveClassField :st :ast :unitDecl :scope defNameId: nameId :cid :isgen :fmId) then {
             needsDtor = true
         }
     }
@@ -4965,7 +4972,7 @@ resolveClass: function {
         :ast
         :unitDecl
         :scope
-        :defName
+        defNameId: nameId
         :cid
         :ccid
         :isgen
@@ -4994,11 +5001,11 @@ registerInterfaceGenerics: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     tid: ztypes.tid
     fnode: objref
 } out bool is {
-    tdecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    tdecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
     od: ast.nodes.getView i: fnode.nid
     if od.objectdef.not then return false
     k: u64
@@ -5025,17 +5032,17 @@ resolveFacet: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     fnode: objref
 } is {
     fid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        nameId: defNameId
         typetype: ztypes.ztypetype.facetType
     )
     ffid: fid
@@ -5044,7 +5051,7 @@ resolveFacet: function {
     scanVisibility :st :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     st.reg.setValtype typeId: fid value: true
     attachInterfaceAsConstants :st :ast parentId: fid :fnode
-    isgen: registerInterfaceGenerics :st :ast :unitDecl :scope :defName tid: fid :fnode
+    isgen: registerInterfaceGenerics :st :ast :unitDecl :scope :defNameId tid: fid :fnode
     # `type` INSIDE AN INTERFACE IS THE INTERFACE. Reading it as the first
     # recorded CONFORMER makes a spec member's parameter concrete: the vtable
     # slot comes out typed `bool (*op_eq)(void*, pt)` and there is no uniform
@@ -5056,7 +5063,7 @@ resolveFacet: function {
     # emitters omit its slot and the checker refuses the call -- but that is a
     # decision about the MEMBER, taken where the member is used, rather than a
     # rewriting of what its type means.
-    specThis: nameIdOf :ast name: defName
+    specThis: defNameId
     dropThis: true
     kSiter: u64
     for kSiter < fnode.nis loop {
@@ -5064,8 +5071,8 @@ resolveFacet: function {
         kSiter = kSiter + 1
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
-            refuseSpecWithoutReceiver :st :ast :sm :defName kind: "facet"
-            ownerNmId: nameIdOf :ast name: defName
+            refuseSpecWithoutReceiver :st :ast :sm :defNameId kind: "facet"
+            ownerNmId: defNameId
             sido: (
                 resolveMethodFn
                 :st
@@ -5112,7 +5119,7 @@ refuseSpecWithoutReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     sm: argref
-    defName: StringView
+    defNameId: zast.nameid
     kind: StringView
 } is {
     if (ast.nodes.get i: sm.operation).functiondef.not then return
@@ -5126,7 +5133,11 @@ refuseSpecWithoutReceiver: function {
         lineno: (nodeLine :n)
         colno: (nodeCol :n)
         e: zast.err.typeError
-        msg: "'\{mname}' in \{kind} '\{defName}' takes no receiver: a \{kind} value calls each spec on the value it holds"
+        msg: "'\{mname}' in \{kind} '\{(
+            zast.nameTextAt
+            :ast
+            ref: defNameId
+        )}' takes no receiver: a \{kind} value calls each spec on the value it holds"
         note: "".string
         hint: "give it a receiver (`t: this.view`), or declare it on each implementing type".string
         width: mname.length
@@ -5144,19 +5155,18 @@ resolveProtocol: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
     # the protocol's name, interned
     nameId: zast.nameid
     fnode: objref
 } is {
     pid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         :scope
         :ast
         :unitDecl
         ownerNameId: zast.nameid
-        name: defName
+        :nameId
         typetype: ztypes.ztypetype.protocolType
     )
     ppid: pid
@@ -5165,7 +5175,7 @@ resolveProtocol: function {
     scanVisibility :st :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     st.reg.setValtype typeId: pid value: false
     attachInterfaceAsConstants :st :ast parentId: pid :fnode
-    isgen: registerInterfaceGenerics :st :ast :unitDecl :scope :defName tid: pid :fnode
+    isgen: registerInterfaceGenerics :st :ast :unitDecl :scope defNameId: nameId tid: pid :fnode
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves StringViewable NESTED inside String's `:StringViewable` marker, so its
     # spec `:this` binds to the enclosing String -- mirror that for the system protocol.
@@ -5186,8 +5196,8 @@ resolveProtocol: function {
         kSiter = kSiter + 1
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
-            refuseSpecWithoutReceiver :st :ast :sm :defName kind: "protocol"
-            ownerNmId: nameIdOf :ast name: defName
+            refuseSpecWithoutReceiver :st :ast :sm defNameId: nameId kind: "protocol"
+            ownerNmId: nameId
             sido: (
                 resolveMethodFn
                 :st
@@ -5336,7 +5346,6 @@ resolveObjectDef: function {
     ast: Ast
     unitDecl: ztypes.declid
     rf: ztypes.declid
-    defName: StringView
     # the definition's name, interned
     nameId: zast.nameid
     defn: objref
@@ -5344,7 +5353,7 @@ resolveObjectDef: function {
     # a refused definition still resolves, as the fieldless type it was
     # written as: the error is its report, and a use of it -- through its
     # unit too (`kit.Mark`) -- reads the type rather than a missing member
-    refuseEmptyObjectDef :st :defName :defn
+    refuseEmptyObjectDef :st defName: (zast.nameTextAt :ast ref: nameId).stringView :defn
     match (
         defn.kind
     ) case recordDef then {
@@ -5374,38 +5383,38 @@ resolveObjectDef: function {
                 )
                 ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defn.nid tid: nvid
             } else {
-                resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
+                resolveRecord :st scope: rf :ast :unitDecl defNameId: nameId rnode: defn
             }
         }
     } case dataDef then {
-        resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
+        resolveRecord :st scope: rf :ast :unitDecl defNameId: nameId rnode: defn
     } case variantDef then {
-        resolveVariant :st scope: rf :ast :unitDecl :defName vnode: defn
+        resolveVariant :st scope: rf :ast :unitDecl defNameId: nameId vnode: defn
     } case choiceDef then {
-        resolveVariant :st scope: rf :ast :unitDecl :defName vnode: defn
+        resolveVariant :st scope: rf :ast :unitDecl defNameId: nameId vnode: defn
     } case unionDef then {
-        resolveUnion :st scope: rf :ast :unitDecl :defName vnode: defn
+        resolveUnion :st scope: rf :ast :unitDecl defNameId: nameId vnode: defn
     } case classDef then {
-        resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
+        resolveClass :st scope: rf :ast :unitDecl :nameId cnode: defn
     } case generatorDef then {
-        resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
+        resolveClass :st scope: rf :ast :unitDecl :nameId cnode: defn
     } case typedefDef then {
-        if (resolve.typedefDefIsReftype :st :ast :unitDecl :defName) then {
-            resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
+        if (resolve.typedefDefIsReftype :st :ast :unitDecl defNameId: nameId) then {
+            resolveClass :st scope: rf :ast :unitDecl :nameId cnode: defn
         } else {
-            resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
+            resolveRecord :st scope: rf :ast :unitDecl defNameId: nameId rnode: defn
         }
     } case facetDef then {
-        resolveFacet :st scope: rf :ast :unitDecl :defName fnode: defn
+        resolveFacet :st scope: rf :ast :unitDecl defNameId: nameId fnode: defn
     } case protocolDef then {
-        resolveProtocol :st scope: rf :ast :unitDecl :defName :nameId fnode: defn
+        resolveProtocol :st scope: rf :ast :unitDecl :nameId fnode: defn
     } else null
     objrid: (
         resolve.resolvedByIds
         :st
         :ast
         :unitDecl
-        name: (zast.poolFind pool: ast.names text: defName)
+        name: nameId
     )
     if objrid.some then {
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defn.nid tid: objrid
@@ -5504,19 +5513,18 @@ resolveInlineGenericUnit: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     parentTid: ztypes.tid
     parentDeclId: ztypes.declid
     unitOpId: zast.nodeid
 } is {
     # a template's members resolve in the template's own scope
-    rf: st.typing.declFindChild :parentDeclId nameId: (zast.poolFind pool: ast.names text: defName)
+    rf: st.typing.declFindChild :parentDeclId nameId: defNameId
     if rf.isZero then rf = parentDeclId
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
     # this template's own Decl, under the parent the CALLER names: the unit
     # root for a top-level template, the namespace's Decl for a nested one.
     # A (unit, name) walk reaches only the first.
-    defNameId: zast.poolFind pool: ast.names text: defName
     templateDecl: st.typing.declFindChild :parentDeclId nameId: defNameId
     # st.reg.newType has no dedup and a template can be demanded again after it
     # resolved, so a second visit must mint nothing at all. resolveNamespaceUnit
@@ -5524,7 +5532,11 @@ resolveInlineGenericUnit: function {
     # the id this minted, so it is the durable "already done" mark.
     if (st.typing.declTypeOf declId: templateDecl).notZero then return
     {
-        uid: st.reg.newType name: defName typetype: ztypes.ztypetype.unitType
+        uid: (
+            st.reg.newType
+            name: (zast.nameTextAt :ast ref: defNameId).stringView
+            typetype: ztypes.ztypetype.unitType
+        )
         did: uid
         rid: uid
         if (zast.unitIsGeneric :ast unitId: unitOpId) then {
@@ -5583,7 +5595,7 @@ resolveInlineGenericUnit: function {
             j = j + 1
             bmNode: argRefAt :ast nid: bm
             if bmNode.nid.notZero then {
-                ownerNmId: nameIdOf :ast name: defName
+                ownerNmId: defNameId
                 mido: (
                     resolveMethodFn
                     :st
@@ -5636,8 +5648,7 @@ resolveUnitNestedType: function {
     td: st.typing.declFindChild parentDeclId: scope nameId: bmNode.name
     if td.isZero then return
     if (st.typing.declIsResolved declId: td) then return
-    tn: zast.nameTextCopy :ast ref: bmNode.name
-    resolve.resolveDef :st :scope :ast :unitDecl defName: tn.stringView defnId: bmNode.operation
+    resolve.resolveDef :st :scope :ast :unitDecl defNameId: bmNode.name defnId: bmNode.operation
     st.typing.declSetResolved declId: td
 }
 

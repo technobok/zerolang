@@ -1012,8 +1012,7 @@ forceUnitDef: function {
         nameId: nmId
     )
     ) then return ztypes.tid.zero
-    dn: zast.nameTextCopy :ast ref: nmId
-    resolveDef :st :scope :ast :unitDecl defName: dn.stringView defnId: opId
+    resolveDef :st :scope :ast :unitDecl defNameId: nmId defnId: opId
     ro: resolvedByIds :st :ast unitDecl: targetUnit name: nmId
     if ro.some then {
         return ro
@@ -1415,14 +1414,14 @@ typedefDefIsReftype: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     unitDecl: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
 } out bool is {
     dd: (
         declOfUnitDef
         :st
         scope: unitDecl
         :unitDecl
-        nameId: (zast.poolFind pool: ast.names text: defName)
+        nameId: defNameId
     )
     if dd.isZero then return false
     tt: declDefTypetype :st :ast declId: dd
@@ -2635,8 +2634,7 @@ descendNamedId: function {
     bmr: argRefAt :ast nid: dnode
     if bmr.nid.notZero then {
         # the definition resolves under its spelling: copied once, here
-        nTd: zast.nameTextCopy :ast ref: nameId
-        resolveDef :st scope: rf :ast :unitDecl defName: nTd.stringView defnId: bmr.operation
+        resolveDef :st scope: rf :ast :unitDecl defNameId: nameId defnId: bmr.operation
     }
     return (resolvedDescentTid :st :ast :unitDecl :nameId :classified :tid)
 }
@@ -2666,7 +2664,7 @@ resolveDottedDef: function {
     ast: Ast
     unitDecl: ztypes.declid
     rf: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defn: dpref
 } is {
     # A unit-level type alias (`astnode: zast.astnode`): resolve the cross-unit dotted
@@ -2691,7 +2689,7 @@ resolveDottedDef: function {
         ) then {
             # a ring through a unit's name, caught where the definition resolves
             # (valueHeadIsSelf); one reached here is reported the same way
-            ad: st.typing.declFindChild parentDeclId: rf nameId: (nameIdOf :ast name: defName)
+            ad: st.typing.declFindChild parentDeclId: rf nameId: defNameId
             if ad.notZero then (
                 reportAliasCycle
                 :st
@@ -2737,13 +2735,12 @@ resolveDef: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
+    defNameId: zast.nameid
     defnId: zast.nodeid
 } is {
     # a definition resolves in the scope it is written in, whatever path
     # asked for it. A definition the name index cannot place keeps the
     # caller's scope (a nested unit's member reached from its own unit walk).
-    defNameId: nameIdOf :ast name: defName
     resolvedDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
     # every resolver funnels through here, so this is where a unit is first
     # reached: before its first definition resolves
@@ -2802,10 +2799,10 @@ resolveDef: function {
         if dbt.notZero then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defnId tid: dbt
     } case objectdef then {
         orf: declare.objRefAt :ast nid: defnId
-        declare.resolveObjectDef :st :ast :unitDecl :rf :defName nameId: defNameId defn: orf
+        declare.resolveObjectDef :st :ast :unitDecl :rf nameId: defNameId defn: orf
     } case dottedpath then {
         ddr: statics.dpRefAt :ast nid: defnId
-        resolveDottedDef :st :ast :unitDecl :rf :defName defn: ddr
+        resolveDottedDef :st :ast :unitDecl :rf :defNameId defn: ddr
     } case atomid then {
         # a bare name (`Text: String`, `n: LIMIT`) resolves as its use would:
         # a constant folds, an alias chases its target, and a target nothing
@@ -2819,7 +2816,7 @@ resolveDef: function {
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
     # defs and on demand (resolvedByIds' alias-follow) for aliases; no tail pass.
     st.mode = savedMode
-    defDecl: declOfUnitDef :st scope: rf :unitDecl nameId: (nameIdOf :ast name: defName)
+    defDecl: declOfUnitDef :st scope: rf :unitDecl nameId: defNameId
     st.typing.declSetResolving declId: defDecl mark: false
     if defDecl.notZero then {
         st.typing.declSetResolved declId: defDecl
@@ -3304,7 +3301,15 @@ resolveDemandedReexport: function {
     if isRx then {
         resolveAliasKey :st :ast :declId
     } else {
-        resolveDef :st scope: rf :ast unitDecl: puDecl defName: defNameText defnId: opId
+        (
+            resolveDef
+            :st
+            scope: rf
+            :ast
+            unitDecl: puDecl
+            defNameId: (st.typing.declNameOf :declId)
+            defnId: opId
+        )
     }
     # A unit-level CONSTANT is a definition like any other, and resolveDef
     # has no leg for the shapes one takes -- a bare literal, a suffixed
@@ -3457,7 +3462,7 @@ resolveDemandedDecl: function {
             :st
             :ast
             unitDecl: puDecl
-            defName: defNameText.stringView
+            defNameId: (st.typing.declNameOf :declId)
             :parentTid
             parentDeclId: dParent
             unitOpId: opId
@@ -3931,7 +3936,6 @@ resolveOrdinaryMember: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerDeclId: ztypes.declid
-    mName: StringView
     bmNode: argref
     speculative: bool
 } is {
@@ -3966,7 +3970,7 @@ resolveOrdinaryMember: function {
     if isRx when (ast.nodes.get i: bmNode.operation).dottedpath then {
         resolveAliasKey :st :ast declId: md
     } else if isDone.not then {
-        resolveDef :st :scope :ast :unitDecl defName: mName defnId: bmNode.operation
+        resolveDef :st :scope :ast :unitDecl defNameId: bmNode.name defnId: bmNode.operation
     }
     # the eager tier reaches a BARE re-export through resolveDef, not
     # resolveAliasKey, so the value node's reference edge is recorded here as
@@ -4023,7 +4027,7 @@ resolveUnitMemberAt: function {
             :st
             :ast
             :unitDecl
-            defName: mName.stringView
+            defNameId: bmNode.name
             parentTid: ownerTid
             parentDeclId: ownerDeclId
             unitOpId: bmNode.operation
@@ -4050,7 +4054,6 @@ resolveUnitMemberAt: function {
         :unitDecl
         :scope
         :ownerDeclId
-        mName: mName.stringView
         :bmNode
         :speculative
     )
@@ -4252,14 +4255,13 @@ resolveMainUnitInstantiations: function {
             if (declAtProgramTop typing: st.typing parentDeclId: tpd
             ).not when r.tmplOpId.notZero then {
                 {
-                    rtT: zast.nameTextCopy ast: program ref: rtId
                     parentTid: st.typing.declTypeOf declId: tpd
                     (
                         declare.resolveInlineGenericUnit
                         :st
                         ast: program
                         unitDecl: tu
-                        defName: rtT.stringView
+                        defNameId: rtId
                         :parentTid
                         parentDeclId: tpd
                         unitOpId: r.tmplOpId
