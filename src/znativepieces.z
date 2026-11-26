@@ -45,22 +45,42 @@ uw: record {
     word: u32
 }
 
+# rowkind -- what a PRow is, which its findings call it by
+rowkind: variant {
+    # a unit's or a group's row: `<owner>.<key>`
+    row: null
+    # a unit's or a group's helper row, keyed `@<name>`: `@<owner>.<name>`
+    helper: null
+    # a structural row, which has no unit: `@<shape>.<operator>`
+    structural: null
+    # a named piece of a row or of a fixed file: `@<owner>.<name>`
+    piece: null
+    # a class: `<owner>.<class>`
+    classRow: null
+} as { tag: u8.tag }
+
+# rowlabel -- a row as its findings name it (rowKey), each part by its word in
+# Pieces.words. Never what a row is compared by: that is its place in
+# Pieces.rows
+rowlabel: record {
+    kind: rowkind
+    # the unit or group it is a row of, whose words its demands are; a
+    # structural row's shape (`record` of `record.==`)
+    owner: u32
+    # its name there: a row's key (`u8./`), a helper's without its `@`, a
+    # piece's or a class's name, a structural row's operator
+    name: u32
+}
+
 # PRow -- a row, a piece or a class as the closure walks it
 PRow: class {
-    # its key as the emitter keys it: `<unit>.<key>`, `@<unit>.<name>`; a
-    # class's `<unit>.<class>`
-    key: String
-    # where a finding about it is: `row <key>`, `piece <key>`, `class <key>`
-    where: String
-    # the unit the key names
-    owner: u32
+    label: rowlabel
     # the words that fire it
     demands: ListVal u32
     # what it needs, its pulls among them
     needs: ListVal uw
     # the C it writes
     text: String
-    isPiece: bool
     # a class's template, which the class is written from; "" for the others
     template: String
 }
@@ -77,11 +97,13 @@ Pieces: class {
     kw: zast.Vocab
     # the id of the demand word `@unit`, which a unit-wide row answers
     unitWord: u32
-    # each name a piece defines, to its entry: the name, the piece's key and its
-    # first demand
+    # the word of the prelude, whose helper rows any compiler writes
+    preludeWord: u32
+    # each name a piece defines, to its entry: the name, the place in `rows` of
+    # the row defining it, and that row's first demand
     owner: (MapRV String v: u64)
     ownerName: List String
-    ownerKey: List String
+    ownerRow: ListVal u64
     ownerDem: ListVal uw
     # how many named pieces there are
     pieceCount: u64
@@ -103,9 +125,10 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
         fired: List (ListVal u64)
         kw: (zast.Vocab.create block: pieceWord)
         unitWord: 0
+        preludeWord: 0
         owner: (MapRV String v: u64)
         ownerName: List String
-        ownerKey: List String
+        ownerRow: ListVal u64
         ownerDem: ListVal uw
         pieceCount: 0
         outside: List String
@@ -113,6 +136,7 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
         fails: List String
     )
     p.unitWord = p.words.id text: "@unit"
+    p.preludeWord = p.words.id text: "prelude"
     fd: nativec.systemc.foundation
     for each c: fd.conditions loop p.conds.add item: c.name.string
     readRows :p
@@ -124,7 +148,7 @@ checkPieces: function {emitter: StringView fails: List String} out String is {
     emitterNeeds :p :emitter
     memberCalls :p
     demandClasses :p
-    s: "PIECES \{p.pieceCount} NAMES \{p.ownerKey.length}"
+    s: "PIECES \{p.pieceCount} NAMES \{p.ownerRow.length}"
     for each f: p.fails loop fails.append from: f.copy
     return s
 }
@@ -161,26 +185,32 @@ readFixedFile: function {p: Pieces fl: schema.file} is {
     p.outsideWhere.append "file \{fl.name}"
 }
 
-# duplicatePieces -- each piece's key is defined once
+# duplicatePieces -- each piece's name is defined once in its owner
 duplicatePieces: function {p: Pieces} is {
-    keys: Set String
+    seen: SetVal uw
     for each r: p.rows loop {
-        if r.isPiece.not then continue
-        if (keys.has item: r.key) then p.fails.append "piece \{r.key} is defined more than once"
-        keys.add item: r.key.copy
+        if r.label.kind.piece.not then continue
+        k: uw owner: r.label.owner word: r.label.name
+        if (seen.has item: k) then p.fails.append "\{rowText :p :r} is defined more than once"
+        seen.add item: k
     }
 }
 
 # readRow -- one row, and its named pieces as rows of their own
 readRow: function {p: Pieces owner: StringView w: schema.row} is {
-    key: zemitterc.servedKey :owner key: w.key.stringView
     t: w.body.string
     for each f: w.fragments loop t.append "\n\{f}"
     dem: znativec.listText xs: w.demand
-    r: newRow :p key: key.stringView demand: dem.stringView text: t.take piece: false
+    r: (
+        newRow
+        :p
+        label: (dataLabel :p :owner key: w.key.stringView)
+        demand: dem.stringView
+        text: t.take
+    )
     addNeeds :p :r needs: (znativec.listText xs: w.needs).stringView
     addNeeds :p :r needs: (znativec.listText xs: w.pulls).stringView
-    hosts: (key.stringView.startsWith "@prelude.") or (r.demands.contains item: p.unitWord)
+    hosts: (isPreludeHelper :p :r) or (r.demands.contains item: p.unitWord)
     rest: String
     for each pc: w.pieces loop {
         if pc.name.length == 0 then {
@@ -190,22 +220,31 @@ readRow: function {p: Pieces owner: StringView w: schema.row} is {
         readPiece :p :owner :pc fixed: false
         if hosts.not then (
             p.fails.append
-            "row \{key} has pieces but is no prelude row and answers no @unit, so no compiler writes them a piece at a time"
+            "\{(
+                rowText
+                :p
+                :r
+            )} has pieces but is no prelude row and answers no @unit, so no compiler writes them a piece at a time"
         )
     }
+    if w.pieces.length > 0 then {
+        p.outside.append rest.take
+        p.outsideWhere.append (rowText :p :r)
+    }
     p.rows.append r
-    if w.pieces.length == 0 then return
-    p.outside.append rest.take
-    p.outsideWhere.append "row \{key}"
 }
 
 # readClass -- one class: its destroy is its C and its needs cover it. No demand
 # word fires a class; the struct is written when the class is used or live
 readClass: function {p: Pieces owner: StringView c: schema.classRow} is {
-    key: zemitterc.servedKey :owner key: c.key.stringView
-    r: newRow :p key: key.stringView demand: "" text: c.destroy.string piece: false
+    r: (
+        newRow
+        :p
+        label: (labelOf :p kind: rowkind.classRow :owner name: c.key.stringView)
+        demand: ""
+        text: c.destroy.string
+    )
     r.demands = ListVal u32
-    r.where = "class \{key}"
     r.template = c.template.string
     addNeeds :p :r needs: (znativec.listText xs: c.needs).stringView
     p.rows.append r
@@ -214,59 +253,100 @@ readClass: function {p: Pieces owner: StringView c: schema.classRow} is {
 # readPiece -- one named piece of `owner`'s, a row of its own: `@<owner>.<name>`;
 # `fixed` when it is a fixed file's, written unfilled
 readPiece: function {p: Pieces owner: StringView pc: schema.piece fixed: bool} is {
-    key: "@".string
-    key.append owner
-    key.append "."
-    key.append pc.name.stringView
     r: (
         newRow
         :p
-        key: key.stringView
+        label: (labelOf :p kind: rowkind.piece :owner name: pc.name.stringView)
         demand: (znativec.listText xs: pc.demand).stringView
         text: pc.text.string
-        piece: true
     )
     addNeeds :p :r needs: (znativec.listText xs: pc.needs).stringView
     p.pieceCount = p.pieceCount + 1
     if (ifDepthOk body: pc.text.stringView).not then (
         p.fails.append
-        "piece \{key} opens or closes an #if it does not close or open"
+        "\{rowText :p :r} opens or closes an #if it does not close or open"
     )
     if fixed when (loneHole text: pc.text.stringView) then (
         p.fails.append
-        "piece \{key} of a fixed file spells an `@` that is not a String/StringView hole"
+        "\{rowText :p :r} of a fixed file spells an `@` that is not a String/StringView hole"
     )
     p.rows.append r
 }
 
-# newRow -- a row of `key`, fired by the words of `demand` (comma-separated),
-# or by its key's last part when it names none
-newRow: function {
-    p: Pieces key: StringView demand: StringView text: String.take piece: bool
-} out PRow is {
-    wh: "row ".string
-    if piece then wh = "piece ".string
-    wh.append key
-    r: (
-        PRow
-        key: key.string
-        where: wh.take
-        owner: (p.words.id text: (unitOf :key))
-        demands: ListVal u32
-        needs: ListVal uw
-        :text
-        isPiece: piece
-        template: String
+# newRow -- a row called `label`, fired by the words of `demand`
+# (comma-separated), or by its name's last part when it names none
+newRow: function {p: Pieces label: rowlabel demand: StringView text: String.take} out PRow is {
+    r: PRow :label demands: ListVal u32 needs: ListVal uw :text template: String
+    nm: p.words.textOf k: label.name
+    for each d: (demandsOf key: nm.stringView :demand) loop r.demands.append (
+        p.words.id
+        text: d.stringView
     )
-    for each d: (demandsOf :key :demand) loop r.demands.append (p.words.id text: d.stringView)
     return r
 }
 
-# unitOf -- a key's unit: its first part, without a leading `@`
-unitOf: function {key: StringView.view} outx StringView is {
-    k: key
-    if k.startsWith "@" then k = k.substring from: 1 to: k.length
-    return (k.substring from: 0 to: ((k.indexOf needle: ".").or d: k.length))
+# dataLabel -- a unit's, group's or structural row's label, read off its key
+# as the data writes it: a key `@<name>` is a helper's; a structural row (no
+# owner) is its shape's, `record.==` the shape `record` and the operator `==`
+dataLabel: function {p: Pieces owner: StringView key: StringView} out rowlabel is {
+    if owner.length == 0 then {
+        dot: (key.indexOf needle: ".").or d: key.length
+        from: dot
+        if dot < key.length then from = dot + 1
+        return (
+            labelOf
+            :p
+            kind: rowkind.structural
+            owner: (key.substring from: 0 to: dot)
+            name: (key.substring :from to: key.length)
+        )
+    }
+    if key.startsWith "@" then return (
+        labelOf
+        :p
+        kind: rowkind.helper
+        :owner
+        name: (key.substring from: 1 to: key.length)
+    )
+    return (labelOf :p kind: rowkind.row :owner name: key)
+}
+
+# labelOf -- a label of `kind`, its owner and name each interned as a word
+labelOf: function {p: Pieces kind: rowkind owner: StringView name: StringView} out rowlabel is {
+    return (rowlabel :kind owner: (p.words.id text: owner) name: (p.words.id text: name))
+}
+
+# rowKey -- a row's key as a finding spells it: `<owner>.<name>` for a row or a
+# class, `@<owner>.<name>` for a helper, a structural row or a piece. A
+# message's text only
+rowKey: function {p: Pieces.view label: rowlabel} out String is {
+    k: String
+    if label.kind.row.not when label.kind.classRow.not then k.append "@"
+    k.append (p.words.textOf k: label.owner)
+    k.append "."
+    k.append (p.words.textOf k: label.name)
+    return k
+}
+
+# rowText -- where a finding about a row is: `row <key>`, `piece <key>` or
+# `class <key>` (rowKey)
+rowText: function {p: Pieces.view r: PRow.view} out String is {
+    w: "row ".string
+    if r.label.kind.piece then w = "piece ".string
+    if r.label.kind.classRow then w = "class ".string
+    w.append (rowKey :p label: r.label)
+    return w
+}
+
+# ownerText -- the key of the row defining owner entry `o`'s name (rowKey)
+ownerText: function {p: Pieces.view o: u64} out String is {
+    return (rowKey :p label: (p.rows.get i: (p.ownerRow.get i: o)).label)
+}
+
+# isPreludeHelper -- a helper row of the prelude's, whose pieces and fragments
+# any compiler writes
+isPreludeHelper: function {p: Pieces.view r: PRow.view} out bool is {
+    return r.label.kind.helper and (r.label.owner == p.preludeWord)
 }
 
 # demandsOf -- the words of `demand`, or the key's last part when it has none
@@ -288,10 +368,12 @@ demandsOf: function {key: StringView demand: StringView} out List String is {
 # addNeeds -- each need of `needs` (comma-separated) onto `r`: `<unit>.<demand>`,
 # or a demand of its own unit; a `?<condition>` it holds under must be declared
 addNeeds: function {p: Pieces r: PRow needs: StringView} is {
+    if needs.length == 0 then return
+    where: rowKey :p label: r.label
     for each n0: (needs.split sep: ",") loop {
         if n0.length == 0 then continue
-        n: uncond :p need: n0 where: r.key.stringView
-        r.needs.append (needOf :p need: n.stringView own: r.owner)
+        n: uncond :p need: n0 where: where.stringView
+        r.needs.append (needOf :p need: n.stringView own: r.label.owner)
     }
 }
 
@@ -326,7 +408,7 @@ indexRows: function {p: Pieces} is {
     k: u64
     for each r: p.rows loop {
         for each d: r.demands loop {
-            key: uw owner: r.owner word: d
+            key: uw owner: r.label.owner word: d
             i: (p.byDemand.get :key).or d: p.fired.length
             if i == p.fired.length then {
                 p.byDemand.set :key value: i
@@ -369,7 +451,7 @@ fire: function {p: Pieces.view demand: uw todo: ListVal uw} is {
 startOf: function {r: PRow.view} out ListVal uw is {
     s: ListVal uw
     for each x: r.needs loop s.append x
-    for each d: r.demands loop s.append (uw owner: r.owner word: d)
+    for each d: r.demands loop s.append (uw owner: r.label.owner word: d)
     return s
 }
 
@@ -389,8 +471,8 @@ ownPass: function {p: Pieces pieces: bool} is {
         names: List String
         {
             r: p.rows.get i: k
-            prelude: r.isPiece.not and (r.key.stringView.startsWith "@prelude.")
-            if pieces and r.isPiece or (pieces.not and prelude) then names = (
+            prelude: isPreludeHelper :p :r
+            if pieces and r.label.kind.piece or (pieces.not and prelude) then names = (
                 definedNames
                 body: r.text.stringView
                 kw: p.kw
@@ -405,17 +487,17 @@ ownPass: function {p: Pieces pieces: bool} is {
 # replaced only when `replace`
 own: function {p: Pieces name: StringView row: u64 replace: bool} is {
     r: p.rows.get i: row
-    dem: uw owner: r.owner word: (r.demands.get i: 0)
-    o: (p.owner.get key: name.string).or d: p.ownerKey.length
-    if o == p.ownerKey.length then {
+    dem: uw owner: r.label.owner word: (r.demands.get i: 0)
+    o: (p.owner.get key: name.string).or d: p.ownerRow.length
+    if o == p.ownerRow.length then {
         p.owner.set key: name.string value: o
         p.ownerName.append from: name.string
-        p.ownerKey.append from: r.key.copy
+        p.ownerRow.append row
         p.ownerDem.append dem
         return
     }
     if replace.not then return
-    p.ownerKey.set i: o val: r.key.copy
+    p.ownerRow.set i: o val: row
     p.ownerDem.set i: o val: dem
 }
 
@@ -426,8 +508,8 @@ spelled: function {p: Pieces.view text: StringView} out ListVal u64 is {
     for each n: (identsOf text: (stripC :text).stringView) loop {
         if (seen.has item: n) then continue
         seen.add item: n.copy
-        o: (p.owner.get key: n.copy).or d: p.ownerKey.length
-        if o < p.ownerKey.length then r.append o
+        o: (p.owner.get key: n.copy).or d: p.ownerRow.length
+        if o < p.ownerRow.length then r.append o
     }
     return r
 }
@@ -435,19 +517,24 @@ spelled: function {p: Pieces.view text: StringView} out ListVal u64 is {
 # rowNeeds -- every row and piece that spells a name another piece defines
 # needs that piece's demand
 rowNeeds: function {p: Pieces} is {
+    k: u64
     for each r: p.rows loop {
+        here: k
+        k = k + 1
         names: spelled :p text: r.text.stringView
         if names.length == 0 then continue
         cov: closure :p start: (startOf :r)
         for each o: names loop {
-            if r.isPiece.not when (isHoleName :p :o) then continue
-            if (p.ownerKey.get i: o) == r.key then continue
+            if r.label.kind.piece.not when (isHoleName :p :o) then continue
+            # a name the row defines itself
+            if (p.ownerRow.get i: o) == here then continue
             dem: p.ownerDem.get i: o
             if (cov.has item: dem).not then (
                 p.fails.append
-                "\{r.where} spells \{ownedName :p :o} (piece \{(
-                    p.ownerKey.get
-                    i: o
+                "\{rowText :p :r} spells \{ownedName :p :o} (piece \{(
+                    ownerText
+                    :p
+                    :o
                 )}) and does not need it: add the need \{demandText :p :dem}"
             )
         }
@@ -483,8 +570,9 @@ outsideText: function {p: Pieces} is {
         for each o: (spelled :p text: t.stringView) loop (
             p.fails.append
             "\{p.outsideWhere.get i: k} spells \{ownedName :p :o} (piece \{(
-                p.ownerKey.get
-                i: o
+                ownerText
+                :p
+                :o
             )}) outside any piece, where nothing declares the need"
         )
         k = k + 1
@@ -581,8 +669,9 @@ sectionCover: function {p: Pieces where: StringView text: StringView decl: (List
         if (cov.has item: dem).not then (
             p.fails.append
             "\{where} spells \{ownedName :p :o} (piece \{(
-                p.ownerKey.get
-                i: o
+                ownerText
+                :p
+                :o
             )}) and neither its needs nor its section's needs name \{demandText :p :dem}"
         )
     }
@@ -604,7 +693,7 @@ memberCalls: function {p: Pieces} is {
 memberCallsOf: function {p: Pieces owner: StringView w: schema.row} is {
     if w.constant.length > 0 then return
     if w.fragments.length == 0 when w.pieces.length == 0 then return
-    key: zemitterc.servedKey :owner key: w.key.stringView
+    key: rowKey :p label: (dataLabel :p :owner key: w.key.stringView)
     have: Set String
     for each m: w.members loop have.add item: (uncond :p need: m.stringView where: key.stringView)
     code: String
@@ -847,8 +936,9 @@ emitterItemNeeds: function {p: Pieces it: EmitterItem.view emitter: StringView} 
             if (got.has item: w).not then (
                 p.fails.append
                 "\{loc} spells \{n} (piece \{(
-                    p.ownerKey.get
-                    i: o
+                    ownerText
+                    :p
+                    :o
                 )}) without preludeNeed :ctx memb: \"\{w}\""
             )
         }
