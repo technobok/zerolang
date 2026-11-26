@@ -2292,6 +2292,23 @@ placePanicRow: function {pieces: PieceState} is {
     if pr > 0 then pieces.rowsInPlace.add item: pr
 }
 
+# panicFragment -- the fragment z_panic is written from: the prelude's `@panic`
+# row's (panicRow); refused, its key 0, when the prelude has none
+panicFragment: function {ctx: Ctx} out textkey is {
+    pr: panicRow pieces: ctx.pieces
+    if pr > 0 then {
+        pfs: nativepieces.rowFragIds pieces: ctx.pieces row: pr
+        if pfs.length > 0 then return (nativepieces.fragmentKey id: (pfs.get i: 0))
+    }
+    (
+        emitFail
+        :ctx
+        what: "nativec: the prelude has no @panic row, so the panic function has nothing to be written from".string
+        line: 0
+    )
+    return (nativepieces.fragmentKey id: 0)
+}
+
 # panicRow -- the prelude's `@panic` row, whose fragment is z_panic's; 0 when
 # the prelude has none
 panicRow: function {pieces: PieceState.view} out u64 is {
@@ -2592,7 +2609,7 @@ emitC: function {
             rowsAlwaysClosed: IdSet u64
             rowNeedsAt: 0
             rowsInPlace: IdSet u64
-            piecedFrags: Set String
+            piecedFrags: ListVal u32
             memberConds: ListVal membercond
             memberAlways: IdSet u64
             memberWords: (zast.Vocab.create block: memberWord)
@@ -2856,23 +2873,12 @@ emitC: function {
         fnsBuf: fnsBuf.stringView
     )
     # z_panic's fragment, chosen by the table (a threaded program's differs)
-    pr: panicRow pieces: ctx.pieces
-    pf: String
-    if pr > 0 then pf = nativepieces.rowFragText pieces: ctx.pieces row: pr
-    if pf.length == 0 then {
-        (
-            emitFail
-            :ctx
-            what: "nativec: the prelude has no @panic row, so the panic function has nothing to be written from".string
-            line: 0
-        )
-        pf = "_Z_PANIC".string
-    }
+    pf: panicFragment :ctx
     # the fixed files are decided last, when every demand is in: the header,
     # then the String, StringView and hash fragments the code follows
     nativepieces.closeRowNeeds :ctx
     head: String
-    nativepieces.emitCHeader libs: linkLibs :csrcs panicFrag: pf.stringView :ctx buf: head
+    nativepieces.emitCHeader libs: linkLibs :csrcs panicFrag: pf :ctx buf: head
     nativepieces.emitStringFragments :ctx buf: head
     # the Ctx's failures follow assembly's own, in the order recorded: popped
     # twice, so each is moved rather than copied

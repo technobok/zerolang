@@ -325,9 +325,19 @@ fileKey: function {pieces: PieceState name: StringView} out textkey is {
     return (textKey :pieces kind: textkind.fixedFile :name)
 }
 
-# fragKey -- the key of fragment `name`
-fragKey: function {pieces: PieceState name: StringView} out textkey is {
-    return (textKey :pieces kind: textkind.fragment :name)
+# fragmentKey -- the key of the fragment whose text id is `id`
+fragmentKey: function {id: u32} out textkey is {
+    return (textkey kind: textkind.fragment.tag name: id)
+}
+
+# newFragmentKey -- the key of a fragment registered now, with a text id of its
+# own: a row's fragment is told apart by that id, never by its name, which
+# (`label`) is kept for what a message or a mark says of it
+newFragmentKey: function {pieces: PieceState label: StringView} out textkey is {
+    if pieces.textNames.length == 0 then pieces.textNames.append "".string
+    id: pieces.textNames.length.u32.orPanic
+    pieces.textNames.append from: label.string
+    return (fragmentKey :id)
 }
 
 # textLabel -- text `key` as a message names it: `fixed file head`, `fragment
@@ -637,7 +647,6 @@ servedUnit: function {
 newRowWalk: function out RowWalk is {
     return (
         RowWalk
-        used: Set String
         rf: (
             RowFacts
             declared: Set String
@@ -647,7 +656,7 @@ newRowWalk: function out RowWalk is {
             linkReplaced: ListVal reqpath
             sourceReplaced: ListVal reqpath
         )
-        frags: String
+        frags: ListVal u32
         boxes: String
         at: String
         impl: 0
@@ -773,9 +782,9 @@ servedRequirements: function {
 # far, the facts the rows declared and settled (RowFacts), and what the reader
 # handed over for the row it is reading -- its fragments' names
 RowWalk: class {
-    used: Set String
     rf: RowFacts
-    frags: String
+    # the text ids of the fragments of the row being read
+    frags: ListVal u32
     # the boxes the row's fragments spell, `<type>.<protocol>` comma-separated
     # (spelledBoxes)
     boxes: String
@@ -817,24 +826,20 @@ RowWalk: class {
     # fragment -- one of the row's fragments, cached under a name of its own
     fragment: function {t: this ctx: Ctx owner: StringView key: StringView text: String.take} is {
         spelledBoxes text: text.stringView into: t.boxes
-        nm: t.fragmentName :owner :key
-        servedFragment pieces: ctx.pieces name: nm.stringView text: text.take
-        t.markFragment :ctx name: nm.stringView
-        if t.frags.length > 0 then t.frags.append ","
-        t.frags.append nm
+        fk: newFragmentKey pieces: ctx.pieces label: (fragmentLabel :owner :key).stringView
+        setText pieces: ctx.pieces key: fk text: text.take
+        t.markFragment :ctx :fk
+        t.frags.append fk.name
     }
 
     # pieces -- the row's fragment as pieces (servedPieces), in place of its
     # fragments: written a piece at a time
     pieces: function {t: this ctx: Ctx owner: StringView key: StringView text: PiecedText.take} is {
-        nm: t.fragmentName :owner :key
-        (
-            ctx.pieces.piecedTexts.set
-            key: (fragKey pieces: ctx.pieces name: nm.stringView)
-            value: text.take
-        )
-        ctx.pieces.piecedFrags.add item: nm.copy
-        t.frags = nm.copy
+        fk: newFragmentKey pieces: ctx.pieces label: (fragmentLabel :owner :key).stringView
+        ctx.pieces.piecedTexts.set key: fk value: text.take
+        ctx.pieces.piecedFrags.append fk.name
+        t.frags = ListVal u32
+        t.frags.append fk.name
     }
 
     # classRow -- a class whose C struct the runtime writes, recorded in the
@@ -850,12 +855,17 @@ RowWalk: class {
         destroy: StringView
         need: String.take
     } is {
-        dn: String
+        dn: u32
         if destroy.length > 0 then {
             dkey: "\{key}.@destroy"
-            dn = t.fragmentName :owner key: dkey.stringView
-            servedFragment pieces: ctx.pieces name: dn.stringView text: "\{destroy}\n"
-            t.markFragment :ctx name: dn.stringView
+            dk: (
+                newFragmentKey
+                pieces: ctx.pieces
+                label: (fragmentLabel :owner key: dkey.stringView).stringView
+            )
+            setText pieces: ctx.pieces key: dk text: "\{destroy}\n"
+            t.markFragment :ctx fk: dk
+            dn = dk.name
         }
         (
             ctx.pieces.classRows.append
@@ -864,21 +874,21 @@ RowWalk: class {
                 uname: owner.string
                 cls: key.string
                 live: live.take
-                destroy: dn.take
+                destroy: dn
                 tmpl: template.string
                 need: need.take
             )
         )
     }
 
-    # markFragment -- the fragment `name` marked with where its row is written,
-    # when a mark is asked for
-    markFragment: function {t: this.view ctx: Ctx name: StringView} is {
+    # markFragment -- the fragment keyed `fk` marked with where its row is
+    # written, when a mark is asked for
+    markFragment: function {t: this.view ctx: Ctx fk: textkey} is {
         if t.at.length == 0 then return
         (
             recordMark
             pieces: ctx.pieces
-            key: (fragKey pieces: ctx.pieces :name)
+            key: fk
             m: (NativeMark mark: t.at.copy parts: (Map String V: String))
         )
     }
@@ -928,9 +938,8 @@ RowWalk: class {
         rid: u64
         if x.fragment then {
             if t.frags.length > 0 then {
-                ctx.pieces.rows.fragTexts.append from: t.frags.copy
-                x.fragText = ctx.pieces.rows.fragTexts.length
-                t.frags = String
+                x = withFragments pieces: ctx.pieces r: x frags: t.frags
+                t.frags = ListVal u32
             }
             if members.length > 0 then {
                 ctx.pieces.rows.memberTexts.append from: members.string
@@ -972,34 +981,40 @@ RowWalk: class {
             constant: x.constMask != 0
         )
     }
+}
 
-    # fragmentName -- the name of a row's fragment, `_Z_<UNIT>_<KEY>`, each byte
-    # that is no letter or digit `_`, suffixed until it is unused
-    fragmentName: function {t: this owner: StringView key: StringView} out String is {
-        base: "_Z_\{owner.toUpperAscii}_"
-        k: key
-        if k.startsWith "@" then k = k.substring from: 1 to: k.length
-        up: k.toUpperAscii
-        i: u64
-        for i < up.length loop {
-            b: (up.stringView.byteAt :i).or d: 0
-            alnum: (ascii.isUpper :b) or (ascii.isDigit :b)
-            if alnum then {
-                base.appendByte :b
-            } else {
-                base.appendByte 0c_.u8
-            }
-            i = i + 1
+# withFragments -- row `r` holding the fragments `frags` (their text ids), which
+# join the row table's run of them
+withFragments: function {
+    pieces: PieceState r: zemitrows.nativerow frags: (ListVal u32).view
+} out zemitrows.nativerow is {
+    x: r
+    x.fragFrom = pieces.rows.fragIds.length
+    for each f: frags loop pieces.rows.fragIds.append f
+    x.fragTo = pieces.rows.fragIds.length
+    return x
+}
+
+# fragmentLabel -- what a message calls a row's fragment, `_Z_<UNIT>_<KEY>`,
+# each byte that is no letter or digit `_`: a label, not a key -- two rows of
+# one key (a variant and its plain row) share it
+fragmentLabel: function {owner: StringView key: StringView} out String is {
+    base: "_Z_\{owner.toUpperAscii}_"
+    k: key
+    if k.startsWith "@" then k = k.substring from: 1 to: k.length
+    up: k.toUpperAscii
+    i: u64
+    for i < up.length loop {
+        b: (up.stringView.byteAt :i).or d: 0
+        alnum: (ascii.isUpper :b) or (ascii.isDigit :b)
+        if alnum then {
+            base.appendByte :b
+        } else {
+            base.appendByte 0c_.u8
         }
-        nm: base.copy
-        n: 2.u64
-        for (t.used.has item: nm) loop {
-            nm = "\{base}_\{n}"
-            n = n + 1
-        }
-        t.used.add item: nm.copy
-        return nm
+        i = i + 1
     }
+    return base
 }
 
 # checkedFacts -- a user unit's facts, read off its checked file
@@ -1172,7 +1187,7 @@ checkedRow: function {
             (
                 recordMark
                 pieces: ctx.pieces
-                key: (fragKey pieces: ctx.pieces name: w.frags.stringView)
+                key: (fragmentKey id: (w.frags.get i: 0))
                 m: (piecesMark :u :ps mark: w.at.copy)
             )
         }
@@ -1545,11 +1560,6 @@ servedUnitOrder: function {fd: schema.foundation} out ListVal u64 is {
         k = k + 1
     }
     return order
-}
-
-# servedFragment -- a fragment's text, as fragment `name`
-servedFragment: function {pieces: PieceState name: StringView text: String.take} is {
-    setText :pieces key: (fragKey :pieces :name) text: text.take
 }
 
 # servedTemplate -- one template zc carries, its sections as pieces
@@ -2391,7 +2401,7 @@ emitCHeader: function {
     # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
     csrcs: (List String).view
     # the fragment z_panic is written from
-    panicFrag: StringView
+    panicFrag: textkey
     ctx: Ctx
     buf: String.borrow
 } is {
@@ -2416,8 +2426,7 @@ emitCHeader: function {
     buf.append "\n"
     p0: fileKey pieces: ctx.pieces name: "head"
     buf.append (loadFixedFile :ctx key: p0)
-    p1: fragKey pieces: ctx.pieces name: panicFrag
-    buf.append (loadFixedFile :ctx key: p1)
+    buf.append (loadFixedFile :ctx key: panicFrag)
     p2: fileKey pieces: ctx.pieces name: "alloc"
     buf.append (loadFixedFile :ctx key: p2)
 }
@@ -3156,26 +3165,27 @@ writeRuntimeRow: function {
     ctx.pieces.rowsWritten.add item: row
     closeRowNeeds :ctx
     rowMemberUses :prog :ctx :row
-    fl: rowFragText pieces: ctx.pieces :row
+    fl: rowFragIds pieces: ctx.pieces :row
     if (rowAlways pieces: ctx.pieces :row) then {
-        for each fr: (fl.stringView.split sep: ",") loop {
-            if fr.length > 0 then writeFragment :prog :ctx frag: fr :buf
-        }
+        for each fr: fl loop writeFragment :prog :ctx fk: (fragmentKey id: fr) :buf
         return
     }
     rb: String
-    for each fr: (fl.stringView.split sep: ",") loop {
-        if fr.length > 0 then writeFragment :prog :ctx frag: fr buf: rb
-    }
+    for each fr: fl loop writeFragment :prog :ctx fk: (fragmentKey id: fr) buf: rb
     wrapCond pieces: ctx.pieces c: (rowCond pieces: ctx.pieces :row) body: rb.stringView :buf
 }
 
-# rowFragText -- fragment row `row`'s fragment names, comma-separated, as an
-# owned copy (the fragment emitter lends ctx); "" for a piece
-rowFragText: function {pieces: PieceState.view row: u64} out String is {
-    ft: (pieces.rows.rows.get i: row).fragText
-    if ft == 0 then return String
-    return (pieces.rows.fragTexts.get i: ft - 1).copy
+# rowFragIds -- fragment row `row`'s fragments' text ids, copied (the fragment
+# emitter lends ctx); none for a piece
+rowFragIds: function {pieces: PieceState.view row: u64} out ListVal u32 is {
+    r: ListVal u32
+    rw: pieces.rows.rows.get i: row
+    k: rw.fragFrom
+    for k < rw.fragTo loop {
+        r.append (pieces.rows.fragIds.get i: k)
+        k = k + 1
+    }
+    return r
 }
 
 # rowMemberUses -- the template members row `row`'s fragments call (its
@@ -3306,15 +3316,16 @@ emitUnorderedUnits: function {
     }
 }
 
-# writeFragment -- a fired row's fragment `frag`, its holes filled, onto `buf`.
+# writeFragment -- a fired row's fragment, keyed `fk`, its holes filled, onto
+# `buf`.
 writeFragment: function {
     prog: Program.view
     ctx: Ctx
-    frag: StringView
+    fk: textkey
     buf: String.borrow
 } is {
-    p: fragKey pieces: ctx.pieces name: frag
-    if (ctx.pieces.piecedFrags.has item: frag.string) then {
+    p: fk
+    if (ctx.pieces.piecedFrags.contains item: fk.name) then {
         plan: rtRowPlan :ctx id: (tmplParsed :ctx key: p)
         buf.append (rtFragmentText :prog :ctx :plan all: false key: p)
         return
