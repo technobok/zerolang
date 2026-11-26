@@ -709,38 +709,26 @@ isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     }
 }
 
-# declOfFnDef -- the Decl of a resolved function definition: a free
-# function's unit child, or a method's member Decl under its owner (the
-# defName arrives owner-composed -- "u8.+" -- and the owner may be the
-# DECLARING protocol rather than thisName, so the owner splits at the
-# composed name's last dot). 0 when unindexed (synthesized functions).
+# declOfFnDef -- the Decl of a resolved function definition named
+# `defNameId`: a free function's unit child, or a method's member Decl under its
+# owner, which may be the DECLARING type rather than the one `this` binds to
+# (resolveFunction). 0 when unindexed (synthesized functions).
 declOfFnDef: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerNameId: zast.nameid
-    defName: StringView
+    defNameId: zast.nameid
     thisName: zast.nameid
 } out ztypes.declid is {
-    if thisName.isZero then return (
-        declOfUnitDef
-        :st
-        :scope
-        :unitDecl
-        nameId: (nameIdOf :ast name: defName)
-    )
+    if thisName.isZero then return (declOfUnitDef :st :scope :unitDecl nameId: defNameId)
     mown: declOfUnitDef :st :scope :unitDecl nameId: thisName
     if ownerNameId.notZero when ownerNameId != thisName then {
         malt: declOfUnitDef :st :scope :unitDecl nameId: ownerNameId
         if malt.notZero then mown = malt
     }
     if mown.u64 == 0 then return ztypes.declid.zero
-    return (
-        st.typing.declFindChild
-        parentDeclId: mown
-        nameId: (zast.poolFind pool: ast.names text: defName)
-    )
+    return (st.typing.declFindChild parentDeclId: mown nameId: defNameId)
 }
 
 # recordGenericParamRef -- note that node `nid` spells the generic parameter
@@ -1285,10 +1273,10 @@ checkMemberDeclEagerly: function {
     # the enclosing type
     thisTid: ztypes.tid
     # the name to underline when the type turns out to hold a reference
-    defName: StringView
+    defNameId: zast.nameid
 } is {
-    checkReturnPins :st :ast :fnode fid: ztypes.tid.zero :defName
-    checkThisPinHonesty :st :ast :fnode :thisTid :defName
+    checkReturnPins :st :ast :fnode fid: ztypes.tid.zero :defNameId
+    checkThisPinHonesty :st :ast :fnode :thisTid :defNameId
 }
 
 # checkThisPinHonesty -- checkPinHonesty for an `out this`, eagerly where the
@@ -1304,10 +1292,10 @@ checkThisPinHonesty: function {
     # the enclosing type
     thisTid: ztypes.tid
     # the member's name, for the report width
-    defName: StringView
+    defNameId: zast.nameid
 } is {
     if (returnNamesThis :ast oId: fnode.returntype).not then return
-    checkPinHonesty :st :ast :fnode retTid: thisTid :defName defNameId: zast.nameid
+    checkPinHonesty :st :ast :fnode retTid: thisTid defName: "" :defNameId
 }
 
 # defNameWidth -- the caret width for a definition's name: the label's when
@@ -1416,8 +1404,9 @@ checkReturnPins: function {
     # the function's type id, zero at the eager pass before types are recorded
     fid: ztypes.tid
     # the declared name the refusal underlines
-    defName: StringView
+    defNameId: zast.nameid
 } is {
+    width: (zast.nameTextAt :ast ref: defNameId).length
     pinsHere: fnode.pins
     if (returnHasBorrowMarker :ast oId: fnode.returntype) when fnode.pins.not then {
         (
@@ -1428,7 +1417,7 @@ checkReturnPins: function {
             colno: fnode.colno
             e: zast.err.ownerError
             msg: "a reference return keeps its sources locked for the result's lifetime -- write `outx T.borrow` / `outx T.view`, not `out`".string
-            width: defName.length
+            :width
         )
         return
     }
@@ -1441,7 +1430,7 @@ checkReturnPins: function {
             colno: fnode.colno
             e: zast.err.ownerError
             msg: "`outx` pins nothing here: no parameter or receiver is `.borrow` or `.view` -- write `out`, or mark the source the result reads through (e.g. `t: this.view`)".string
-            width: defName.length
+            :width
         )
     }
 }
@@ -1715,17 +1704,16 @@ receiverOwnerDecl: function {
 # caller's scope.
 fnSignatureScope: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerNameId: zast.nameid
-    defName: StringView
+    defNameId: zast.nameid
 } out ztypes.declid is {
     rf: scope
     if ownerNameId.notZero then {
         od: declOfUnitDef :st scope: rf :unitDecl nameId: ownerNameId
         if od.notZero then {
-            fd: st.typing.declFindChild parentDeclId: od nameId: (nameIdOf :ast name: defName)
+            fd: st.typing.declFindChild parentDeclId: od nameId: defNameId
             if fd.notZero then rf = fd
         }
     }
@@ -1742,23 +1730,29 @@ resolveFunction: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    # a method's owner, by interned name id; 0 for a free function
+    # a method's owner, by interned name id: the type whose member it is, where
+    # its Decl and its type are declared -- a protocol for its spec members; 0
+    # for a free function
     ownerNameId: zast.nameid
-    defName: StringView
+    # the function's own name
+    defNameId: zast.nameid
     fnId: zast.nodeid
+    # the type a `this` parameter is bound to: the owner, but `String` for the
+    # system's StringViewable (resolveProtocol), and 0 where nothing binds one (a
+    # free function, a unit template's function)
     thisName: zast.nameid
     skipThisType: bool
 } out ztypes.tid is {
     # a METHOD's signature resolves in the scope of its declaration, under
-    rf: fnSignatureScope :st :ast :unitDecl :scope :ownerNameId :defName
+    rf: fnSignatureScope :st :unitDecl :scope :ownerNameId :defNameId
     fid: (
-        declareCanonicalType
+        resolve.declareCanonicalTypeId
         :st
         scope: rf
         :ast
         :unitDecl
         :ownerNameId
-        name: defName
+        nameId: defNameId
         typetype: ztypes.ztypetype.functionType
     )
     fnode: bodies.fnRefAt :ast nid: fnId
@@ -1794,7 +1788,7 @@ resolveFunction: function {
             op: faOp
         )
     }
-    fnDecl: declOfFnDef :st scope: rf :ast :unitDecl :ownerNameId :defName :thisName
+    fnDecl: declOfFnDef :st scope: rf :unitDecl :ownerNameId :defNameId :thisName
     # link the declaration to its type up front: the parameter loop below
     # records ownership and defaults on member declarations, which needs the
     # owner reachable from its type id.
@@ -1810,7 +1804,7 @@ resolveFunction: function {
     spPrev: st.walk.sigFnNode
     st.walk.sigFnNode = fnId
     sfPrev: st.walk.sigFnName
-    st.walk.sigFnName = nameIdOf :ast name: defName
+    st.walk.sigFnName = defNameId
     kP: u64
     for kP < fnode.nparams loop {
         pmId: zast.fnParamAt :ast nid: fnId i: kP
@@ -1841,7 +1835,7 @@ resolveFunction: function {
         :isgen
         :fnDecl
         :receiverEnclDecl
-        :defName
+        :defNameId
         :thisName
         :fnode
     )
@@ -1863,7 +1857,8 @@ resolveMethodFn: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerNameId: zast.nameid
-    mname: StringView
+    # the method's own name
+    mnameId: zast.nameid
     thisName: zast.nameid
     opId: zast.nodeid
     skipThis: false
@@ -1879,7 +1874,7 @@ resolveMethodFn: function {
             :ast
             :unitDecl
             :ownerNameId
-            defName: mname
+            defNameId: mnameId
             fnId: opId
             :thisName
             skipThisType: skipThis
@@ -1902,7 +1897,7 @@ resolveMethodFnLazy: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerNameId: zast.nameid
-    mname: StringView
+    mnameId: zast.nameid
     thisName: zast.nameid
     opId: zast.nodeid
     lazyOk: bool
@@ -1914,7 +1909,7 @@ resolveMethodFnLazy: function {
         optionval.some
         ztypes.tid.zero
     )
-    return (resolveMethodFn :st :scope :ast :unitDecl :ownerNameId :mname :thisName :opId)
+    return (resolveMethodFn :st :scope :ast :unitDecl :ownerNameId :mnameId :thisName :opId)
 }
 
 # functiondefIsNative -- an is-block method marked `is native` (no body to
@@ -2310,7 +2305,6 @@ attachMethods: function {
         kAiter = kAiter + 1
         am: argRefAt :ast nid: amId
         if am.nid.notZero then {
-            mname: zast.nameTextCopy :ast ref: am.name
             if am.name == zast.wellKnown.slot.wkCreate then hasCreate = true
             {
                 mop: ast.nodes.getView i: am.operation
@@ -2321,7 +2315,7 @@ attachMethods: function {
                         :ast
                         fnode: (fnRefOf fnode: mop)
                         thisTid: parentId
-                        defName: mname.stringView
+                        defNameId: am.name
                     )
                 }
             }
@@ -2336,7 +2330,7 @@ attachMethods: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: mname.stringView
+                mnameId: am.name
                 thisName: ownerNmId
                 opId: am.operation
                 lazyOk: agen.not
@@ -3394,7 +3388,7 @@ attachRecordIsItems: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: fname.stringView
+                mnameId: fm.name
                 thisName: ownerNmId
                 opId: fm.operation
                 lazyOk: isgen.not
@@ -3595,7 +3589,6 @@ attachSumMethods: function {
         kAiter = kAiter + 1
         am: argRefAt :ast nid: amId
         if am.nid.notZero then {
-            mname: zast.nameTextCopy :ast ref: am.name
             ownerNmId: nameIdOf :ast name: defName
             mido: (
                 resolveMethodFnLazy
@@ -3604,7 +3597,7 @@ attachSumMethods: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: mname.stringView
+                mnameId: am.name
                 thisName: ownerNmId
                 opId: am.operation
                 lazyOk: isgen.not
@@ -4306,7 +4299,7 @@ resolveClassMethodDecl: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: fname.stringView
+                mnameId: fm.name
                 thisName: ownerNmId
                 opId: fm.operation
                 lazyOk: isgen.not
@@ -4691,7 +4684,6 @@ resolveClassAsMethods: function {
         itemIdx = itemIdx + 1
         item: argRefAt :ast nid: amP4Id
         if item.nid.notZero when (isFunctionDefOp op: (ast.nodes.getView i: item.operation)) then {
-            itemName: zast.nameTextCopy :ast ref: item.name
             produces: false
             isNative: functiondefIsNative op: (ast.nodes.getView i: item.operation)
             if isgen then {
@@ -4713,7 +4705,7 @@ resolveClassAsMethods: function {
                     :ast
                     :unitDecl
                     ownerNameId: ownerNmId
-                    mname: itemName.stringView
+                    mnameId: item.name
                     thisName: ownerNmId
                     opId: item.operation
                 )
@@ -5073,7 +5065,6 @@ resolveFacet: function {
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
             refuseSpecWithoutReceiver :st :ast :sm :defName kind: "facet"
-            mname: zast.nameTextCopy :ast ref: sm.name
             ownerNmId: nameIdOf :ast name: defName
             sido: (
                 resolveMethodFn
@@ -5082,7 +5073,7 @@ resolveFacet: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: mname.stringView
+                mnameId: sm.name
                 thisName: specThis
                 opId: sm.operation
                 skipThis: dropThis
@@ -5196,7 +5187,6 @@ resolveProtocol: function {
         sm: argRefAt :ast nid: smId
         if sm.nid.notZero then {
             refuseSpecWithoutReceiver :st :ast :sm :defName kind: "protocol"
-            mname: zast.nameTextCopy :ast ref: sm.name
             ownerNmId: nameIdOf :ast name: defName
             sido: (
                 resolveMethodFn
@@ -5205,7 +5195,7 @@ resolveProtocol: function {
                 :ast
                 :unitDecl
                 ownerNameId: ownerNmId
-                mname: mname.stringView
+                mnameId: sm.name
                 thisName: specThis
                 opId: sm.operation
                 skipThis: dropThis
@@ -5593,7 +5583,6 @@ resolveInlineGenericUnit: function {
             j = j + 1
             bmNode: argRefAt :ast nid: bm
             if bmNode.nid.notZero then {
-                fn: zast.nameTextCopy :ast ref: bmNode.name
                 ownerNmId: nameIdOf :ast name: defName
                 mido: (
                     resolveMethodFn
@@ -5602,7 +5591,7 @@ resolveInlineGenericUnit: function {
                     :ast
                     :unitDecl
                     ownerNameId: ownerNmId
-                    mname: fn.stringView
+                    mnameId: bmNode.name
                     thisName: zast.nameid
                     opId: bmNode.operation
                 )
@@ -5733,7 +5722,7 @@ buildUnitMonoMember: function {
                 :ast
                 unitDecl: tmplUnitName
                 ownerNameId: tmplNameId
-                mname: fn.stringView
+                mnameId: fmNode.name
                 thisName: zast.nameid
                 opId: fmNode.operation
             )
