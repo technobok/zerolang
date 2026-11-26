@@ -1037,7 +1037,6 @@ walkDemandedDef: function {
             :st
             scope: rf
             :unitDecl
-            defName: ""
             defNameId: nameId
             fn: cfbFr
             thisName: zast.nameid
@@ -1138,7 +1137,6 @@ checkMethodBodies: function {
     typeTid: ztypes.tid
     opId: zast.nodeid
 } is {
-    typeName: zast.nameTextCopy :ast ref: typeNameId
     # the owner's declaration by its id: a type a nested unit declares shares
     # its name with any top-level one, and the file unit's name answers that one
     ownerDecl: st.typing.declIdOfType typeId: typeTid
@@ -1172,7 +1170,6 @@ checkMethodBodies: function {
             }
             if imIsFn then {
                 {
-                    qn: methodLabel :ast typeName: typeName.stringView memberId: imName
                     isMethodDecl: st.typing.declFindChild parentDeclId: ownerDecl nameId: imName
                     imSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: isMethodDecl
                     if imSkip then deferBody :st :scope :unitDecl declId: isMethodDecl
@@ -1188,7 +1185,6 @@ checkMethodBodies: function {
                             :st
                             :scope
                             :unitDecl
-                            defName: qn.stringView
                             defNameId: zast.nameid
                             fn: imFr
                             thisName: typeNameId
@@ -1223,7 +1219,6 @@ checkMethodBodies: function {
             }
             if amIsFn then {
                 {
-                    qn2: methodLabel :ast typeName: typeName.stringView memberId: amName
                     asMethodDecl: st.typing.declFindChild parentDeclId: ownerDecl nameId: amName
                     amSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: asMethodDecl
                     if amSkip then deferBody :st :scope :unitDecl declId: asMethodDecl
@@ -1235,7 +1230,6 @@ checkMethodBodies: function {
                             :st
                             :scope
                             :unitDecl
-                            defName: qn2.stringView
                             defNameId: zast.nameid
                             fn: amFr
                             thisName: typeNameId
@@ -1307,7 +1301,6 @@ walkDeferredBody: function {
         panic msg: "ztypecheck: deferred member '\{mn}' has no body or no owner to walk"
     }
     ownerTid: st.typing.declTypeOf declId: ownerDecl
-    typeName: zast.nameTextCopy :ast ref: (st.typing.decls.get i: ownerDecl).name
     prevMono: st.typing.curMonoStamp
     savedMode: st.mode
     prevU: st.walk.fn.synthOwnerUnit
@@ -1317,14 +1310,12 @@ walkDeferredBody: function {
     st.mode.suppressBareCtor = false
     st.mode.suppressFnAutoCall = false
     forceOwnerMember :st :ast :ownerDecl :memberId
-    qn: methodLabel :ast typeName: typeName.stringView :memberId
     if mono.notZero then st.typing.beginInstanceWalk next: (nextRowOf :ast)
     (
         checkFunctionBody
         :st
         :scope
         :unitDecl
-        defName: qn.stringView
         defNameId: zast.nameid
         fn: (fnRefAt :ast nid: opId)
         thisName: (st.typing.decls.get i: ownerDecl).name
@@ -1339,12 +1330,6 @@ walkDeferredBody: function {
     st.walk.fn.synthOwnerUnit = prevU
     st.walk.fn.synthOwnerName = prevN
     st.walk.fn.currentThisTid = prevThis
-}
-
-# methodLabel -- the `Type.member` label a method body is walked under.
-methodLabel: function {ast: Ast.view typeName: StringView memberId: zast.nameid} out String is {
-    mn: zast.nameTextAt :ast ref: memberId
-    return "\{typeName}.\{mn}"
 }
 
 # setSynthOwner -- the definition the synth rows of this walk belong to, as
@@ -1371,9 +1356,6 @@ checkFunctionBody: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    # the text a refused return clause underlines when no name id spells the
-    # walk (a method's or an instance's); "" when `defNameId` does
-    defName: StringView
     # the definition's own name; zero for a method's walk or an instance's,
     # which no definition of the unit is named by
     defNameId: zast.nameid
@@ -1413,7 +1395,6 @@ checkFunctionBody: function {
         :st
         :unitDecl
         :scope
-        :defName
         :defNameId
         :fn
         :thisName
@@ -1461,13 +1442,13 @@ walkedFnPins: function {
     return (typing.funcPins.has item: mono)
 }
 
-# underlinedNameId -- the name a refusal at a walked definition underlines when
-# the caller gave no text for it: its own name, else, for an instance's walk, the
-# name its template declares.
+# underlinedNameId -- the name a refusal at a walked definition underlines: its
+# own name, else -- a method's walk, an instance's -- the name its declaration
+# has: the member's, or the one the instance's template declares.
 underlinedNameId: function {
-    st: zenv.ZSymbolTable.view defName: StringView defNameId: zast.nameid declId: ztypes.declid
+    st: zenv.ZSymbolTable.view defNameId: zast.nameid declId: ztypes.declid
 } out zast.nameid is {
-    if defNameId.notZero or (defName.length > 0) then return defNameId
+    if defNameId.notZero then return defNameId
     return (st.typing.declNameOf :declId)
 }
 
@@ -1477,9 +1458,6 @@ checkFunctionBodyIn: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    # the text a refused return clause underlines when no name id spells the
-    # walk (a method's or an instance's); "" when `defNameId` does
-    defName: StringView
     # the definition's own name; zero for a method's walk or an instance's,
     # which no definition of the unit is named by
     defNameId: zast.nameid
@@ -1591,8 +1569,7 @@ checkFunctionBodyIn: function {
                 :ast
                 fnode: fn
                 retTid: crt
-                :defName
-                defNameId: (underlinedNameId :st :defName :defNameId :declId)
+                defNameId: (underlinedNameId :st :defNameId :declId)
             )
         }
         # an instance walk returns what the instance it checks returns
@@ -1737,7 +1714,6 @@ checkNamespaceBodies: function {
                     :st
                     scope: rf
                     :unitDecl
-                    defName: ""
                     defNameId: bm.name
                     fn: cfbFr
                     thisName: zast.nameid
@@ -1791,7 +1767,6 @@ checkUnitBodies: function {
                     :st
                     :scope
                     :unitDecl
-                    defName: ""
                     defNameId: mm.name
                     fn: cfbFr
                     thisName: zast.nameid
@@ -1839,7 +1814,6 @@ checkUnitBodies: function {
                         :st
                         :scope
                         :unitDecl
-                        defName: ""
                         defNameId: bm.name
                         fn: cfbFr
                         thisName: zast.nameid
@@ -1959,7 +1933,6 @@ stampOneFnMono: function {
         :st
         :scope
         :unitDecl
-        defName: ""
         defNameId: zast.nameid
         fn: cfbFr
         thisName: ownerNameId
@@ -2219,7 +2192,6 @@ stampOneClassMono: function {
                 :st
                 :scope
                 :unitDecl
-                defName: ""
                 defNameId: zast.nameid
                 fn: cfbFr
                 thisName: zast.nameid
@@ -2275,7 +2247,6 @@ stampMemberFnMonos: function {
             :st
             :scope
             :unitDecl
-            defName: ""
             defNameId: zast.nameid
             fn: cfbFr
             thisName: zast.nameid
@@ -3077,7 +3048,6 @@ walkUnitMonoFns: function {
                     :st
                     :scope
                     :unitDecl
-                    defName: ""
                     defNameId: zast.nameid
                     fn: cfbFr
                     thisName: zast.nameid
