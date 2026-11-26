@@ -1518,15 +1518,6 @@ servedUnitIndex: function {name: StringView} out optionval u64 is {
     return (optionval.none u64)
 }
 
-# servedForProgram -- the rows zc carries for the unit spelled `name` are the
-# program's: a served unit, and not one the program's own unit of that spelling
-# displaces (Ctx.displacedServed)
-servedForProgram: function {ctx: Ctx.view name: StringView} out bool is {
-    si: servedUnitIndex :name
-    if si.none then return false
-    return (ctx.displacedServed.contains item: si).not
-}
-
 # keptServedOrder -- the served units of `order` the program takes from the
 # standard library: those its own units displace give none of their rows
 keptServedOrder: function {
@@ -2131,28 +2122,18 @@ checkLoadedNatives: function {prog: Program.view ctx: Ctx} is {
     {
         for each uId: prog.ast.units loop {
             opId: zast.nodeid
-            unitName: String
+            unitName: zast.nameid
             impl: u64
             u: prog.ast.nodes.getView i: uId
             if u.namedoperation then {
-                un: zast.poolTextAt pool: prog.ast.names ref: u.name
                 opId = u.operation
-                unitName = un.copy
+                unitName = u.name
                 impl = (
                     ctx.pieces.rows.fileOfUnit
                     ud: (ztypecheck.unitDeclOfNode typing: prog.typing ast: prog.ast :opId)
                 )
             }
-            if opId.notZero then {
-                (
-                    checkNativesResolve
-                    :prog
-                    :ctx
-                    unitOpId: opId
-                    unitName: unitName.stringView
-                    :impl
-                )
-            }
+            if opId.notZero then checkNativesResolve :prog :ctx unitOpId: opId :unitName :impl
         }
     }
 }
@@ -2164,7 +2145,7 @@ checkNativeMembers: function {
     prog: Program.view
     ctx: Ctx
     items: zast.kidspan
-    unitName: StringView
+    unitName: zast.nameid
     # the file implementing the unit (RowTable.fileUnits), 0 for none
     impl: u64
     typeName: zast.nameid
@@ -2175,16 +2156,13 @@ checkNativeMembers: function {
             mo: prog.ast.nodes.getView i: amn.operation
             rk: zemitrows.rowname :impl :typeName name: amn.name
             if mo.functiondef when mo.isNative when (ctx.pieces.rows.hasRowNamed n: rk).not then {
-                tn: zast.nameTextAt ast: prog.ast ref: typeName
-                mn: zast.nameTextAt ast: prog.ast ref: amn.name
-                tk: rowAddress owner: tn.stringView key: mn.stringView
                 ctx.emitErrors.append (
                     noNativeImplFailure
                     :prog
-                    :ctx
                     nid: am
-                    key: (rowAddress owner: unitName key: tk.stringView).stringView
                     :unitName
+                    :typeName
+                    :impl
                 )
             }
         }
@@ -2192,34 +2170,40 @@ checkNativeMembers: function {
 }
 
 # noNativeImplFailure -- E0501 at the declaration `nid` names: it says
-# `is native` and its unit's C implementation has no row `key`. The program's
-# error, not an emitter gap, so it is shown where it was written. A unit outside
-# the standard library with no implementation file at all is told which file
-# it lacks.
+# `is native` and its unit's C implementation has no row for it. The program's
+# error, not an emitter gap, so it is shown where it was written. A unit whose
+# rows no file gave -- no `<unit>/nativec.zd`, and not a unit zc carries -- is
+# told which file it lacks.
 noNativeImplFailure: function {
     prog: Program.view
-    ctx: Ctx.view
     # the declaration's labelled row
     nid: zast.nodeid
-    # the row's key
-    key: StringView
     # the unit the declaration is keyed under
-    unitName: StringView
+    unitName: zast.nameid
+    # the type it is a member of; 0 for a function of the unit
+    typeName: zast.nameid
+    # the unit's place in RowTable.fileUnits; 0 when no file gave its rows,
+    # which the note then says
+    impl: u64
 } out zast.ErrorData is {
     dn: prog.ast.nodes.getView i: nid
     pos: zast.posOf n: dn
-    # the declared name is what the caret marks
-    width: u32
-    if dn.namedoperation then width = (zast.nameTextAt ast: prog.ast ref: dn.name
-    ).length.u32.orPanic
+    # the declared name: the caret marks it, and the row is keyed by it
+    nm: zast.nameid
+    if dn.namedoperation then nm = dn.name
+    mn: zast.nameTextAt ast: prog.ast ref: nm
+    width: mn.length.u32.orPanic
+    un: zast.nameTextAt ast: prog.ast ref: unitName
+    # `<unit>.<name>`, a member's `<unit>.<type>.<name>`: name id 0 is the empty
+    # text, and rowAddress spells an empty owner as nothing
+    tn: zast.nameTextAt ast: prog.ast ref: typeName
+    tk: rowAddress owner: tn.stringView key: mn.stringView
+    key: rowAddress owner: un.stringView key: tk.stringView
     note: String
     hint: "`is native` promises a body from the unit's C implementation: write the body, or add the row".string
-    if (servedForProgram :ctx name: unitName).not when (
-        ctx.implementedUnits.has
-        item: unitName.string
-    ).not then {
-        note = "unit '\{unitName}' has no C implementation file: \{unitName}/nativec.zd beside \{unitName}.z"
-        hint = "write its rows in \{unitName}/nativec.zd (a runtime.nativec value), or write the body"
+    if impl == 0 then {
+        note = "unit '\{un}' has no C implementation file: \{un}/nativec.zd beside \{un}.z"
+        hint = "write its rows in \{un}/nativec.zd (a runtime.nativec value), or write the body"
     }
     return (
         zast.ErrorData
@@ -2250,7 +2234,7 @@ checkNativesResolve: function {
     prog: Program.view
     ctx: Ctx
     unitOpId: zast.nodeid
-    unitName: StringView
+    unitName: zast.nameid
     # the file implementing the unit (RowTable.fileUnits), 0 for none
     impl: u64
 } is {
@@ -2258,7 +2242,6 @@ checkNativesResolve: function {
     for each bm: (zast.kidsOf ast: prog.ast span: bodyIds) loop {
         bn: prog.ast.nodes.getView i: bm
         if bn.namedoperation then {
-            nm: zast.nameTextAt ast: prog.ast ref: bn.name
             op: prog.ast.nodes.getView i: bn.operation
             match (
                 op
@@ -2268,10 +2251,10 @@ checkNativesResolve: function {
                     ctx.emitErrors.append (
                         noNativeImplFailure
                         :prog
-                        :ctx
                         nid: bm
-                        key: (rowAddress owner: unitName key: nm.stringView).stringView
                         :unitName
+                        typeName: zast.nameid.zero
+                        :impl
                     )
                 }
             } case objectdef then {
