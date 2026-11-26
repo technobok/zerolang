@@ -779,6 +779,34 @@ numericParamTyperef: function {
     return r
 }
 
+# namesNoInstance -- the path's parent is an application that names no instance
+# (resolve.resolveMonoRefInline): no numeric parameter is read through it. The
+# question is asked of values too (statics.singletonPathAlias: is `(s.substring
+# from: 0 to: 5).length` such a path?), so it is answered without resolving the
+# parent as a type-ref, which would mint a shell for it.
+namesNoInstance: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    parentId: zast.nodeid
+    thisName: zast.nameid
+} out bool is {
+    if (ast.nodes.getView i: parentId).call.not then return false
+    inst: (
+        resolve.resolveMonoRefInline
+        :st
+        :ast
+        :unitDecl
+        :scope
+        :thisName
+        enclDecl: ztypes.declid
+        opNid: parentId
+        nid: zast.nodeid
+    )
+    return inst.isZero
+}
+
 # numericParamTyperefOf -- what numericParamTyperef answers for a type-ref it
 # has not answered before: the parent is resolved, and a template's parameter
 # named outside the template is reported.
@@ -814,6 +842,7 @@ numericParamTyperefOf: function {
     }
     cd: st.reg.genericParamConstraintOf :tdecl paramName: leafId
     if cd.numKind.has.not then {
+        if (namesNoInstance :st :scope :ast :unitDecl :parentId :thisName) then return ztypes.tid
         pt: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
         if pt.isZero then return ztypes.tid
         return (st.typing.singletonOf instance: pt param: leafId)
