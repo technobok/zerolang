@@ -264,6 +264,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-11-24 | 6e850df8 | [a syntax node is read in place, and the S simplifications](#r-6e850df8) | 1.02s | -- | 208MB / -- | 116 / 603 / 323 (total 1042) | 2,611,250 | 569MB | -- | 219,298 |
 | 2026-11-25 | 018108af | [the perf arc's end: lock rows, rewrites, names by id; re-baseline](#r-018108af) | 1.02s | -- | 207MB / -- | 104 / 591 / 320 (total 1015) | 2,476,458 | 567MB | -- | 219,362 |
 | 2026-11-25 | dd903fea | [mono names by structure: an instance carries no name](#r-dd903fea) | 1.00s | -- | 207MB / -- | 104 / 590 / 315 (total 1009) | 2,399,613 | 565MB | -- | 219,055 |
+| 2026-11-26 | b2e01013 | [the open items: names and units by id, unknown heads refused once](#r-b2e01013) | 1.01s | -- | 207MB / -- | 114 / 586 / 317 (total 1017) | 2,374,280 | 566MB | -- | 219,302 |
 
 
 <a id="r-dd903fea"></a>
@@ -308,6 +309,50 @@ snapshot), one session, zgate ab:
 Of the 76,845 allocations, 50,582 left with the label plumbing (`3c4b80cf`)
 and 12,813 with a name copy per cloned parameter and return (`20ab83a8`).
 Wall for the self-compile is 1.00s against 1.02s at the perf arc's end.
+
+<a id="r-b2e01013"></a>
+**The open items: names and units by id, unknown heads refused once**
+(twenty-one commits, `19092e6d`..`b2e01013`). A correctness and cleanup
+arc, not a perf one: six defects the probes found first (a user unit
+spelled like a served one got the standard library's C rows; an alias's
+value was stamped with its type; a refused native's call added a second
+error; two messages named two types alike or gave no reason), a type
+application whose head names nothing refused once instead of minted as
+a glued name, and then the names the checker, the emitter and the dump
+passed as text carried as ids. Allocations are perf-strict's exact
+count; behaviour / source is zgate ab's split against the commit before:
+
+| commit | what | behaviour | source |
+|---|---|---|---|
+| `ec2c7fe7` | an alias of a value is stamped with what it names | 0 | +1,213 |
+| `0ac0f20b` | a unit is the standard library's by its file | +209 | +1,244 |
+| `65ca8cb0` | an unknown head refused once, and the four checks before it | +1 | +998 |
+| `4aa2d41a` | a function definition resolved by its name id | -4,676 | -495 |
+| `135af45a` | a type definition resolved by its name id | -400 | -426 |
+| `53f8c7ab` | a walked body by id; a method's refusal under its name | -2,683 | -577 |
+| `6c2c2356` | a demanded namespace by id: no copy per declaration | -6,076 | -71 |
+| `637b4581` | the main unit by its declaration: no name copy per rebind | -10,046 | -1,073 |
+| `94a69365` | the native rows' units by owner id | -591 | -231 |
+| `d5625024` | a requirement's unit a pair of ids | -21 | +1,201 |
+| `397a5efd` | a row's fragments by text id | -1,543 | -12 |
+| the other six | zls hover, statics, zl, zl/zls lookups, a unit in hand, flags files | -36 | -344 |
+
+The arc against its start (`1c2c19ce`, the o-0 snapshot), zgate ab:
+
+| | `1c2c19ce` (o-0) | `b2e01013` | change |
+|---|---|---|---|
+| `bin/zc` (-O2), own source | 5,669.3M | 5,652.4M | -0.29% |
+| `bin/zc` (-O2), fixed input | 1,119.1M | 1,115.4M | -0.33% |
+| allocations, own source (perf-strict) | 2,399,613 | 2,374,280 | -1.06% |
+
+The per-commit splits, each against the commit before, sum to -25,862 /
++1,427, 16 off the arc's own -25,846 / +1,411. Of the arc's behaviour,
+10,046 left with the emitter's main-unit name
+copied at every rebind (`637b4581`) and 6,076 with a demanded
+declaration's name copied to be handed on (`6c2c2356`). The source rises
+are the compiler's own new code -- `ec2c7fe7`'s alias helpers,
+`0ac0f20b`'s origin check, `d5625024`'s `reqpath` record and the
+`ListVal` instance it mints. Wall is 1.01s, as at the arc's start.
 
 <a id="r-018108af"></a>
 **The perf arc's end: lock rows, rewrites, names by id; re-baseline** (the
